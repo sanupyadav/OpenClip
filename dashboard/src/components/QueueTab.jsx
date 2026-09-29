@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Activity, Loader2, Clock, ExternalLink } from 'lucide-react';
+import { Activity, Loader2, Clock, ExternalLink, Square } from 'lucide-react';
 import { apiJson } from '../lib/api';
 
 const since = (t) => {
@@ -23,6 +23,22 @@ export default function QueueTab({ onOpenJob }) {
     const clock = setInterval(() => tick((n) => n + 1), 1000);
     return () => { alive = false; clearInterval(poll); clearInterval(clock); };
   }, []);
+
+  const [stopping, setStopping] = useState('');
+
+  const stop = async (j) => {
+    const what = j.status === 'processing' ? 'Stop this running job' : 'Remove this job from the queue';
+    if (!window.confirm(`${what}? It will not be resumed or retried.`)) return;
+    setStopping(j.job_id);
+    try {
+      await apiJson(`/api/local/queue/${encodeURIComponent(j.job_id)}/cancel`, { method: 'POST' });
+      setData((d) => d && { ...d, jobs: d.jobs.filter((x) => x.job_id !== j.job_id) });
+    } catch (e) {
+      alert(e.message || 'Could not stop the job');
+    } finally {
+      setStopping('');
+    }
+  };
 
   const jobs = data?.jobs || [];
   const running = jobs.filter((j) => j.status === 'processing').length;
@@ -65,9 +81,15 @@ export default function QueueTab({ onOpenJob }) {
                 {j.step && <p className="text-xs text-muted truncate mt-0.5 font-mono" title={j.step}>{j.step}</p>}
               </div>
               {j.kind === 'clips' && (
-                <button onClick={() => onOpenJob(j.job_id)} className="btn-quiet px-3 py-1.5 text-xs shrink-0">
-                  <ExternalLink size={12} /> Open
-                </button>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button onClick={() => onOpenJob(j.job_id)} className="btn-quiet px-3 py-1.5 text-xs">
+                    <ExternalLink size={12} /> Open
+                  </button>
+                  <button onClick={() => stop(j)} disabled={stopping === j.job_id} className="btn-quiet px-3 py-1.5 text-xs text-warn">
+                    {stopping === j.job_id ? <Loader2 size={12} className="animate-spin" /> : <Square size={12} />}
+                    {j.status === 'processing' ? 'Stop' : 'Remove'}
+                  </button>
+                </div>
               )}
             </div>
           ))}

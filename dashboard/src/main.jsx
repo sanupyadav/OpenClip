@@ -1,7 +1,6 @@
 import { StrictMode, useState, useEffect, lazy, Suspense } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
-import Landing from './Landing.jsx'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { capture as captureAttribution } from './lib/attribution'
 import PricingPage from './components/PricingPage'
@@ -64,7 +63,7 @@ function DeletedView() {
           You're welcome back any time — signing up again with the same address
           starts a brand-new, empty account.
         </p>
-        <a href="#landing" className="btn-ghost px-4 py-2 inline-flex">Back to openshorts.app</a>
+        <a href="#app" className="btn-ghost px-4 py-2 inline-flex">Back to openClip</a>
       </div>
     </div>
   );
@@ -79,10 +78,8 @@ function Root() {
     if (hash.startsWith('#/deleted')) return 'deleted';
     if (hash.startsWith('#/pricing')) return 'pricing';
     if (hash === '#legal') return 'legal';
-    // #landing = explicit landing view (app logo); section anchors keep the landing mounted
-    if (['#landing', '#features', '#how-it-works', '#pricing', '#comparison', '#faq'].includes(hash)) return 'landing';
-    if (hash === '#app' || hash.startsWith('#app?') || localStorage.getItem('openshorts_skip_landing') === '1') return 'app';
-    return 'landing';
+    // No landing page: every other URL (including old #landing links) opens the dashboard.
+    return 'app';
   };
 
   const [view, setView] = useState(resolveView);
@@ -93,12 +90,6 @@ function Root() {
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
 
-  const handleLaunchApp = () => {
-    localStorage.setItem('openshorts_skip_landing', '1');
-    window.location.hash = '#app';
-    setView('app');
-  };
-
   if (view === 'legal') return <Legal />;
   if (view === 'pricing') return <PricingView />;
   if (view === 'account') return <AccountView />;
@@ -107,8 +98,7 @@ function Root() {
   if (view === 'auth') {
     return <div className="min-h-screen flex items-center justify-center bg-background text-zinc-400">Signing you in…</div>;
   }
-  if (view === 'app') return <App />;
-  return <Landing onLaunchApp={handleLaunchApp} />;
+  return <App />;
 }
 
 // Before React mounts: AuthContext rewrites the URL on auth redirects, which

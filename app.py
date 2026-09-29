@@ -1701,6 +1701,7 @@ def is_transient_failure(logs) -> bool:
 
 def _should_auto_retry(job) -> bool:
     return bool(job and job.get('status') == 'failed' and not _draining
+                and not job.get('cancelled')
                 and int(job.get('auto_retries') or 0) < AUTO_RETRY_LIMIT
                 and job.get('cmd') and is_transient_failure(job.get('logs')))
 
@@ -2376,6 +2377,8 @@ async def run_job(job_id, job_data):
     env = job_data['env']
     output_dir = job_data['output_dir']
     
+    if jobs[job_id].get('cancelled'):
+        return  # stopped from the Queue tab while it was waiting
     jobs[job_id]['status'] = 'processing'
     jobs[job_id]['logs'].append("Job started by worker.")
     print(f"🎬 [run_job] Executing command for {job_id}: {' '.join(cmd)}")
@@ -2386,9 +2389,12 @@ async def run_job(job_id, job_data):
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, # Merge stderr to stdout
             env=env,
-            cwd=os.getcwd()
+            cwd=os.getcwd(),
+            # Own process group, so a user stop can kill main.py's ffmpeg children too.
+            start_new_session=True,
         )
-        
+        jobs[job_id]['_proc'] = process
+
         # We need to capture logs in a thread because Popen isn't async
         t_log = threading.Thread(target=enqueue_output, args=(process.stdout, job_id))
         t_log.daemon = True
@@ -2454,7 +2460,12 @@ async def run_job(job_id, job_data):
                 pass
 
         returncode = process.returncode
-        
+        jobs[job_id].pop('_proc', None)
+        if jobs[job_id].get('cancelled'):
+            jobs[job_id]['status'] = 'failed'
+            jobs[job_id]['logs'].append("⏹️ Stopped by you.")
+            return
+
         if returncode == 0:
             jobs[job_id]['status'] = 'completed'
             jobs[job_id]['logs'].append("Process finished successfully.")
@@ -2619,6 +2630,30 @@ def _queue_row(job_id, job, kind):
             "source": os.path.basename(source) if kind == "clips" and not source.startswith("http") else source,
             "step": step[:200], "started": times[0] if times else None,
             "queue": queue_snapshot(job_id) if kind == "clips" else None}
+
+
+@app.post("/api/local/queue/{job_id}/cancel")
+async def cancel_local_job(job_id: str):
+    """Self-host Queue tab / Clip Generator "Stop": kill a running clip job (and
+    its ffmpeg children) or drop a queued one. Never retried or resumed."""
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Not Found")
+    job = jobs.get(job_id)
+    if not job or job.get("status") not in ("queued", "processing"):
+        raise HTTPException(status_code=404, detail="No running or queued job with that id")
+    job["cancelled"] = True
+    _clear_resume_manifest(job_id)
+    proc = job.get("_proc")
+    if proc is not None and proc.poll() is None:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            proc.kill()
+        # run_job notices the exit within ~2 s and writes the final state.
+    else:
+        job["status"] = "failed"
+        job["logs"].append("⏹️ Stopped by you.")
+    return {"cancelled": job_id}
 
 
 @app.get("/api/local/queue")

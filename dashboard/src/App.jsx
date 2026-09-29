@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Menu, Lock, Rocket } from 'lucide-react';
+import { Square, Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Menu, Lock, Rocket } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import LocalLlmCard from './components/LocalLlmCard';
 import QueueTab from './components/QueueTab';
@@ -1216,7 +1216,7 @@ function App() {
   // entirely — an unlabelled 80px rail ate a fifth of a phone screen.
   const Sidebar = () => (
     <div className="hidden md:flex w-20 lg:w-64 bg-paper2 border-r border-rule flex-col h-full shrink-0 transition-all duration-300">
-      <a href="#landing" className="p-6 flex items-center gap-3" title="go to landing page">
+      <a href="#app" className="p-6 flex items-center gap-3" title="openClip">
         <div className="w-8 h-8 bg-paper3 rounded-input flex items-center justify-center shrink-0 overflow-hidden border border-rule">
           <img src="/logo-openshorts.png" alt="Logo" className="w-full h-full object-cover" />
         </div>
@@ -1272,7 +1272,7 @@ function App() {
       />
       <div className="relative w-[17rem] max-w-[82vw] h-full bg-paper2 border-r border-rule flex flex-col animate-slide-in-left">
         <div className="flex items-center justify-between px-5 h-14 border-b border-rule shrink-0">
-          <a href="#landing" className="flex items-center gap-2.5" onClick={() => setNavOpen(false)}>
+          <a href="#app" className="flex items-center gap-2.5" onClick={() => setNavOpen(false)}>
             <div className="w-7 h-7 bg-paper3 rounded-input overflow-hidden border border-rule shrink-0">
               <img src="/logo-openshorts.png" alt="" className="w-full h-full object-cover" />
             </div>
@@ -1982,6 +1982,22 @@ function App() {
                   </h2>
                   <div className="flex items-center gap-2.5">
                     <ElapsedTimer times={logTimes} running={status === 'processing'} />
+                    {status === 'processing' && !billingEnabled && jobId && (
+                      <button
+                        onClick={async () => {
+                          if (!window.confirm('Stop this job? It will not be resumed or retried.')) return;
+                          try {
+                            await apiJson(`/api/local/queue/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' });
+                          } catch (e) {
+                            alert(e.message || 'Could not stop the job');
+                          }
+                        }}
+                        className="btn-quiet px-2.5 py-1 text-xs text-warn"
+                        title="Stop this job"
+                      >
+                        <Square size={11} /> Stop
+                      </button>
+                    )}
                     <span className={status === 'processing' ? 'badge-brass' :
                       status === 'complete' ? 'badge-ok' :
                         'badge-danger'

@@ -97,12 +97,13 @@ def delete_message(token: str, chat_id: str, message_id: int) -> bool:
 
 
 def _duration(path: str) -> float:
-    out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                          "-of", "default=nw=1:nk=1", path], capture_output=True, text=True, timeout=60)
     try:
+        out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                              "-of", "default=nw=1:nk=1", path], capture_output=True, text=True, timeout=60)
         return float(out.stdout.strip())
-    except ValueError:
-        raise TelegramError("The clip is over 50 MB and could not be read to compress it.")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        raise TelegramError("The clip is over 50 MB and could not be read to compress it "
+                            "(is ffmpeg installed on the server?).")
 
 
 def shrink_to_fit(path: str, limit: int = FIT_BYTES) -> str:
@@ -121,9 +122,12 @@ def shrink_to_fit(path: str, limit: int = FIT_BYTES) -> str:
             video = ["-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr"] + rate
         else:
             video = ["-c:v", "libx264", "-preset", "veryfast"] + rate
-        r = subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", path, *video, "-pix_fmt", "yuv420p",
-                            "-c:a", "aac", "-b:a", f"{AUDIO_KBPS}k", "-movflags", "+faststart", out],
-                           capture_output=True, text=True)
+        try:
+            r = subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", path, *video, "-pix_fmt", "yuv420p",
+                                "-c:a", "aac", "-b:a", f"{AUDIO_KBPS}k", "-movflags", "+faststart", out],
+                               capture_output=True, text=True)
+        except OSError:
+            break
         if r.returncode == 0 and 0 < os.path.getsize(out) <= limit:
             return out
         target *= 0.85

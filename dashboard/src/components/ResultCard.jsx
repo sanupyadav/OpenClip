@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Download, Share2, Instagram, Youtube, Video, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages, FileText, Link2, Scissors, Crosshair, TrendingUp } from 'lucide-react';
+import { Download, Share2, Send, Instagram, Youtube, Video, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages, FileText, Link2, Scissors, Crosshair, TrendingUp } from 'lucide-react';
 import { getApiUrl } from '../config';
 import { apiFetch } from '../lib/api';
 import SubtitleModal from './SubtitleModal';
@@ -10,6 +10,7 @@ import SegmentedControl from './ui/SegmentedControl';
 import WatermarkModal, { watermarkNoticeDismissed } from './WatermarkModal';
 import TikTokDraftNotice from './TikTokDraftNotice';
 import YouTubeUploadModal, { YouTubeMark } from './YouTubeUploadModal';
+import TelegramSendModal, { TelegramMark } from './TelegramSendModal';
 import { useAuth } from '../contexts/AuthContext';
 import { renderInBrowser } from '../lib/renderInBrowser';
 
@@ -59,13 +60,18 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     const { plan, billingEnabled } = useAuth();
     const [showYouTube, setShowYouTube] = useState(false);
     const [ytMark, setYtMark] = useState(null);
+    const [showTelegram, setShowTelegram] = useState(false);
+    const [tgMark, setTgMark] = useState(null);
     useEffect(() => {
         if (billingEnabled || !jobId) return;
         let alive = true;
-        apiFetch(`/api/youtube/uploads/${encodeURIComponent(jobId)}`)
+        const job = encodeURIComponent(jobId);
+        const read = (path, key, set) => apiFetch(path)
             .then((r) => (r.ok ? r.json() : null))
-            .then((d) => { if (alive) setYtMark(d?.uploads?.[String(index)] || null); })
+            .then((d) => { if (alive) set(d?.[key]?.[String(index)] || null); })
             .catch(() => {});
+        read(`/api/youtube/uploads/${job}`, 'uploads', setYtMark);
+        read(`/api/telegram/sends/${job}`, 'sends', setTgMark);
         return () => { alive = false; };
     }, [billingEnabled, jobId, index]);
     const videoRef = React.useRef(null);
@@ -871,6 +877,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     )}
                     <div className="flex flex-wrap gap-1.5">
                         <YouTubeMark mark={ytMark} className="shrink-0" />
+                        <TelegramMark mark={tgMark} className="shrink-0" />
                         {durationReadout && <span className="readout bg-paper3 px-2 py-0.5 rounded-full shrink-0">{durationReadout}</span>}
                         {resolution && <span className="readout bg-paper3 px-2 py-0.5 rounded-full shrink-0">{resolution}</span>}
                         <span className="readout bg-paper3 px-2 py-0.5 rounded-full shrink-0">#shorts</span>
@@ -991,6 +998,11 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     {!billingEnabled && (
                         <button onClick={() => setShowYouTube(true)} className={QUIET_BTN} title="Upload straight to your YouTube channel">
                             <Youtube size={16} className={`${ytMark ? 'text-ok' : 'text-muted'} group-hover:text-brass transition-colors shrink-0`} /> {ytMark ? 'youtube ✓' : 'youtube'}
+                        </button>
+                    )}
+                    {!billingEnabled && (
+                        <button onClick={() => setShowTelegram(true)} className={QUIET_BTN} title="Send to your Telegram chat">
+                            <Send size={16} className={`${tgMark ? 'text-ok' : 'text-muted'} group-hover:text-brass transition-colors shrink-0`} /> {tgMark ? 'telegram ✓' : 'telegram'}
                         </button>
                     )}
                     <button
@@ -1183,6 +1195,17 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                 onOpenSettings={onOpenSettings}
                 uploaded={ytMark}
                 onUploaded={setYtMark}
+            />
+            <TelegramSendModal
+                isOpen={showTelegram}
+                onClose={() => setShowTelegram(false)}
+                clip={clip}
+                jobId={jobId}
+                index={index}
+                inputFilename={serverVideoFile}
+                onOpenSettings={onOpenSettings}
+                sent={tgMark}
+                onSent={setTgMark}
             />
 
             <SubtitleModal

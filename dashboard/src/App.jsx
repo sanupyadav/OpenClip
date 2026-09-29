@@ -3,6 +3,7 @@ import { Square, Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Chec
 import KeyInput from './components/KeyInput';
 import LocalLlmCard, { LlmGatewayForm } from './components/LocalLlmCard';
 import YouTubeDirectCard from './components/YouTubeDirectCard';
+import TelegramCard from './components/TelegramCard';
 import QueueTab from './components/QueueTab';
 import ElapsedTimer from './components/ElapsedTimer';
 import { jobProgress } from './lib/jobProgress';
@@ -1561,6 +1562,7 @@ function App() {
                 <>
               {!billingEnabled && <LocalLlmCard llm={localLlm} settings={llmSettings} onSaved={setLlm} />}
               {!billingEnabled && <YouTubeDirectCard />}
+              {!billingEnabled && <TelegramCard />}
               <KeyInput onKeySet={setApiKey} savedKey={apiKey} />
 
               <div className="card p-4 sm:p-6 mt-8">

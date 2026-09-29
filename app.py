@@ -2761,6 +2761,7 @@ async def list_local_videos():
                 data = {}
             clips = data.get("shorts", [])
             yt_marks = _yt.load(os.path.join(path, ".youtube_uploads.json"))
+            tg_marks = _yt.load(os.path.join(path, ".telegram_sends.json"))
             base = os.path.basename(meta[0]).replace("_metadata.json", "")
             source = os.path.splitext(data.get("source_video") or base)[0].replace("_", " ")
             for i, c in enumerate(clips):
@@ -2771,7 +2772,7 @@ async def list_local_videos():
                                "title": c.get("video_title_for_youtube_short") or c.get("title") or f"Clip {i + 1}",
                                "description": c.get("video_description_for_instagram")
                                               or c.get("video_description_for_tiktok") or "",
-                               "youtube": yt_marks.get(str(i))})
+                               "youtube": yt_marks.get(str(i)), "telegram": tg_marks.get(str(i))})
             # Numbered in the order the moments happen in the source video.
             videos.sort(key=lambda v: v["start"] if v["start"] is not None else 0)
         videos += [{"url": f"/videos/{name}/{os.path.basename(v)}", "title": "UGC video"}
@@ -5734,24 +5735,24 @@ def _yt_upload_blocking(cfg, file_path, meta):
 _YT_MARKS = ".youtube_uploads.json"  # per job dir: {clip index: {videoId, url, privacy, at}}
 
 
-def _yt_job_dir(job_id: str) -> str:
+def _post_job_dir(job_id: str) -> str:
     if not job_id or job_id != os.path.basename(job_id) or job_id.startswith("."):
         raise HTTPException(status_code=404, detail="Job not found")
     return os.path.join(OUTPUT_DIR, job_id)
 
 
 def _yt_marks(job_id: str) -> dict:
-    return _yt.load(os.path.join(_yt_job_dir(job_id), _YT_MARKS))
+    return _yt.load(os.path.join(_post_job_dir(job_id), _YT_MARKS))
 
 
-def _yt_clip_file(job_id: str, clip_index: int, input_filename: Optional[str]) -> Optional[str]:
+def _post_clip_file(job_id: str, clip_index: int, input_filename: Optional[str]) -> Optional[str]:
     """The clip's file name: the one on screen, else the job in memory, else
     the metadata on disk (the gallery lists jobs the server no longer holds)."""
     if input_filename:
         return os.path.basename(input_filename)
     clips = (((jobs.get(job_id) or {}).get("result") or {}).get("clips")) or []
     if not clips:
-        meta = glob.glob(os.path.join(_yt_job_dir(job_id), "*_metadata.json"))
+        meta = glob.glob(os.path.join(_post_job_dir(job_id), "*_metadata.json"))
         if meta:
             clips = (_yt.load(meta[0]) or {}).get("shorts") or []
     if 0 <= clip_index < len(clips):
@@ -5772,11 +5773,11 @@ async def youtube_upload(req: YouTubeUploadRequest, request: Request):
     cfg = _yt.load(_YT_FILE)
     if not cfg.get("refresh_token"):
         raise HTTPException(status_code=400, detail="Connect YouTube in Settings first")
-    job_dir = _yt_job_dir(req.job_id)
+    job_dir = _post_job_dir(req.job_id)
     if req.job_id in jobs:
         await _ensure_job_files(req.job_id, request)
     # basename only: the file must be one of this job's own outputs.
-    name = _yt_clip_file(req.job_id, req.clip_index, req.input_filename)
+    name = _post_clip_file(req.job_id, req.clip_index, req.input_filename)
     file_path = os.path.join(job_dir, name or "")
     if not name or not os.path.isfile(file_path):
         raise HTTPException(status_code=404, detail="Video file not found")
@@ -5793,6 +5794,112 @@ async def youtube_upload(req: YouTubeUploadRequest, request: Request):
         _yt.save(os.path.join(job_dir, _YT_MARKS), marks)
     except OSError as e:
         print(f"⚠️ Could not record the YouTube upload for {req.job_id}: {e}")
+    return mark
+
+
+# --- Send to Telegram (self-host, the user's own bot). See telegram_direct.py.
+import telegram_direct as _tg
+
+_TG_FILE = os.path.join(OUTPUT_DIR, ".telegram.json")
+_TG_MARKS = ".telegram_sends.json"  # per job dir: {clip index: {messageId, url, chat, at}}
+
+
+def _tg_status(cfg=None):
+    cfg = _yt.load(_TG_FILE) if cfg is None else cfg
+    return {"hasToken": bool(cfg.get("token")), "bot": cfg.get("bot"),
+            "chatId": cfg.get("chat_id", ""), "chatTitle": cfg.get("chat_title"),
+            "ready": bool(cfg.get("token") and cfg.get("chat_id"))}
+
+
+@app.get("/api/telegram/status")
+async def telegram_status():
+    _yt_self_host()
+    return _tg_status()
+
+
+class TelegramConfigRequest(BaseModel):
+    bot_token: Optional[str] = None  # blank keeps the saved one
+    chat_id: str = ""
+
+
+@app.put("/api/telegram/config")
+async def telegram_config(req: TelegramConfigRequest):
+    """Save the bot token (checked with getMe) and the chat to send to
+    (checked with getChat, so a typo fails here and not on the first clip)."""
+    _yt_self_host()
+    cfg = _yt.load(_TG_FILE)
+    try:
+        if req.bot_token and req.bot_token.strip():
+            token = req.bot_token.strip()
+            cfg["bot"] = await asyncio.to_thread(_tg.bot_name, token)
+            cfg["token"] = token
+        chat = req.chat_id.strip()
+        if chat and cfg.get("token"):
+            cfg["chat_title"] = await asyncio.to_thread(_tg.chat_title, cfg["token"], chat)
+            cfg["chat_id"] = chat
+        elif not chat:
+            cfg.pop("chat_id", None)
+            cfg.pop("chat_title", None)
+    except _tg.TelegramError as e:
+        raise HTTPException(status_code=400, detail=f"Telegram: {e}")
+    _yt.save(_TG_FILE, cfg)
+    return _tg_status(cfg)
+
+
+@app.get("/api/telegram/chats")
+async def telegram_chats():
+    """Chats the bot saw lately: message the bot (or add it to the group /
+    channel) and pick the chat here."""
+    _yt_self_host()
+    cfg = _yt.load(_TG_FILE)
+    if not cfg.get("token"):
+        raise HTTPException(status_code=400, detail="Save the bot token first")
+    try:
+        return {"chats": await asyncio.to_thread(_tg.recent_chats, cfg["token"])}
+    except _tg.TelegramError as e:
+        raise HTTPException(status_code=400, detail=f"Telegram: {e}")
+
+
+@app.get("/api/telegram/sends/{job_id}")
+async def telegram_sends(job_id: str):
+    _yt_self_host()
+    return {"sends": _yt.load(os.path.join(_post_job_dir(job_id), _TG_MARKS))}
+
+
+class TelegramSendRequest(BaseModel):
+    job_id: str
+    clip_index: int
+    input_filename: Optional[str] = None  # the edited file on screen (hook, captions)
+    title: str = ""
+    description: str = ""
+
+
+@app.post("/api/telegram/send")
+async def telegram_send(req: TelegramSendRequest, request: Request):
+    _yt_self_host()
+    cfg = _yt.load(_TG_FILE)
+    if not (cfg.get("token") and cfg.get("chat_id")):
+        raise HTTPException(status_code=400, detail="Set up Telegram in Settings first")
+    job_dir = _post_job_dir(req.job_id)
+    if req.job_id in jobs:
+        await _ensure_job_files(req.job_id, request)
+    name = _post_clip_file(req.job_id, req.clip_index, req.input_filename)
+    file_path = os.path.join(job_dir, name or "")
+    if not name or not os.path.isfile(file_path):
+        raise HTTPException(status_code=404, detail="Video file not found")
+    try:
+        sent = await asyncio.to_thread(_tg.send_video, cfg["token"], cfg["chat_id"], file_path,
+                                       _tg.caption(req.title, req.description))
+    except _tg.TelegramError as e:
+        raise HTTPException(status_code=400, detail=f"Telegram: {e}")
+    mark = {**sent, "chat": cfg.get("chat_title") or cfg["chat_id"], "at": time.time()}
+    marks_path = os.path.join(job_dir, _TG_MARKS)
+    marks = _yt.load(marks_path)
+    marks[str(req.clip_index)] = mark
+    try:
+        _yt.save(marks_path, marks)
+    except OSError as e:
+        print(f"⚠️ Could not record the Telegram send for {req.job_id}: {e}")
     return mark
 
 

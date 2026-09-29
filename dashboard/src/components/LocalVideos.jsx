@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Film, Download, Trash2, Loader2, Youtube } from 'lucide-react';
+import { Film, Download, Trash2, Loader2, Youtube, Send } from 'lucide-react';
 import { apiJson } from '../lib/api';
 import { getApiUrl } from '../config';
 import YouTubeUploadModal, { YouTubeMark } from './YouTubeUploadModal';
+import TelegramSendModal, { TelegramMark } from './TelegramSendModal';
 
 const mmss = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
 
@@ -13,6 +14,7 @@ export default function LocalVideos({ onCount, onOpenSettings }) {
   const [deleting, setDeleting] = useState('');
   const [error, setError] = useState('');
   const [ytTarget, setYtTarget] = useState(null); // { job, v }
+  const [tgTarget, setTgTarget] = useState(null); // { job, v }
 
   useEffect(() => {
     apiJson('/api/local/videos')
@@ -90,6 +92,23 @@ export default function LocalVideos({ onCount, onOpenSettings }) {
           setYtTarget((t) => t && { ...t, v: { ...t.v, youtube: mark } });
         }}
       />
+      <TelegramSendModal
+        isOpen={!!tgTarget}
+        onClose={() => setTgTarget(null)}
+        clip={tgTarget && { title: tgTarget.v.title, video_description_for_instagram: tgTarget.v.description }}
+        jobId={tgTarget?.job.job_id}
+        index={tgTarget?.v.index}
+        inputFilename={tgTarget?.v.url.split('/').pop()}
+        sent={tgTarget?.v.telegram}
+        onOpenSettings={onOpenSettings}
+        onSent={(mark) => {
+          const { job, v } = tgTarget;
+          setJobs((js) => js.map((j) => (j.job_id !== job.job_id ? j : {
+            ...j, videos: j.videos.map((x) => (x.index === v.index ? { ...x, telegram: mark } : x)),
+          })));
+          setTgTarget((t) => t && { ...t, v: { ...t.v, telegram: mark } });
+        }}
+      />
       {error && <p className="text-sm text-warn">{error}</p>}
       {jobs.map((job) => (
         <div key={job.job_id}>
@@ -114,7 +133,10 @@ export default function LocalVideos({ onCount, onOpenSettings }) {
             {job.videos.map((v, i) => (
               <div key={v.url} className="card overflow-hidden relative">
                 <span className="absolute top-2 left-2 z-10 badge-brass font-mono">#{i + 1}</span>
-                <YouTubeMark mark={v.youtube} className="absolute top-2 right-2 z-10" />
+                <div className="absolute top-2 right-2 z-10 flex flex-col items-end gap-1">
+                  <YouTubeMark mark={v.youtube} />
+                  <TelegramMark mark={v.telegram} />
+                </div>
                 <video src={getApiUrl(v.url)} controls preload="metadata" className="w-full aspect-[9/16] bg-black object-contain" />
                 <div className="p-2 flex items-start justify-between gap-2">
                   <div className="min-w-0">
@@ -129,6 +151,13 @@ export default function LocalVideos({ onCount, onOpenSettings }) {
                         className={v.youtube ? 'text-ok hover:text-brass' : 'text-muted hover:text-brass'}
                         title={v.youtube ? 'On YouTube: upload again' : 'Upload to YouTube'}>
                         <Youtube size={14} />
+                      </button>
+                    )}
+                    {job.kind === 'clips' && v.index != null && (
+                      <button onClick={() => setTgTarget({ job, v })}
+                        className={v.telegram ? 'text-ok hover:text-brass' : 'text-muted hover:text-brass'}
+                        title={v.telegram ? 'Sent to Telegram: send again' : 'Send to Telegram'}>
+                        <Send size={14} />
                       </button>
                     )}
                     <a href={getApiUrl(v.url)} download className="text-muted hover:text-ink" title="Download">

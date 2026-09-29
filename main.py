@@ -1,4 +1,5 @@
 import copy
+import hinglish
 import time
 import cv2
 import subprocess
@@ -1752,11 +1753,27 @@ def transcribe_video(video_path):
 
     print(f"   Detected language '{transcript['language']}', "
           f"{len(transcript['segments'])} segments")
+    if hinglish.wanted(transcript):
+        hinglish.romanize_transcript(transcript, _text_llm_ask())
     for segment in transcript['segments']:
         # Print progress to keep user informed (and prevent timeouts feeling)
         print(f"   [{segment['start']:.2f}s -> {segment['end']:.2f}s] {segment['text']}")
 
     return transcript
+
+def _text_llm_ask():
+    """`ask(prompt, schema) -> dict` on the model that picks the clips (local
+    LLM or Gemini, same choice as get_viral_clips), or None without one."""
+    if llm_backend.active():
+        client, model_name = None, llm_backend.model_name()
+    else:
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            return None
+        client = genai.Client(api_key=api_key)
+        model_name = os.environ.get("GEMINI_MODEL") or 'gemini-3.1-flash-lite'
+    return lambda prompt, schema: _run_gemini_stage(client, model_name, prompt, schema)[0]
+
 
 def _run_gemini_stage(client, model_name, prompt, schema):
     """One schema-enforced model call with transient-error backoff.
@@ -1862,7 +1879,7 @@ def get_viral_clips(transcript_result, video_duration):
     the expensive detail reasoning focused on the shortlist. Cuts are snapped to
     word boundaries so clips don't start/end mid-word.
     """
-    language = str(transcript_result.get('language') or 'unknown')
+    language = hinglish.prompt_language(transcript_result)
     if llm_backend.active():
         # Self-hosted text model: no Google key needed for this stage.
         client = None
@@ -2335,6 +2352,12 @@ if __name__ == '__main__':
                 save_transcript_checkpoint(output_dir, transcript, input_video, duration)
             except NoAudioError as e:
                 print(f"🔇 {e} — switching to visual analysis.")
+
+        # A transcript that did not come through transcribe_video (checkpoint
+        # of an older run, --transcript handover) is romanized here.
+        if transcript is not None and hinglish.wanted(transcript):
+            hinglish.romanize_transcript(transcript, _text_llm_ask())
+            save_transcript_checkpoint(output_dir, transcript, input_video, duration)
 
         # Music-only or wordless footage transcribes to a handful of words.
         # Clip it by what is on screen instead, like a video with no audio.

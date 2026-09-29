@@ -81,6 +81,13 @@ goes as a compressed copy under 49 MB (same resolution, lower bitrate); the clip
 **GPUs.** With Ollama on, GPU 1 is Ollama's and every job runs on GPU 0; with it off, jobs take turns
 on both T4s. Transcription (Whisper on CUDA) and video encoding (NVENC) use the GPU.
 
+## Hindi videos: Hinglish by default
+
+A Hindi transcript is rewritten in Roman letters right after transcription ("aaj ka Minecraft din"),
+so subtitles, hooks and titles come out in Hinglish. It uses the same AI model as the clip picking
+(with a built-in transliterator as the fallback). To keep Devanagari, set `HINGLISH=0` in the launch
+cell's `env` (or the server's `.env`).
+
 ## Troubleshooting
 
 - **`API key not valid` (Gemini) or `Name or service not known`:** the model URL is not reachable from

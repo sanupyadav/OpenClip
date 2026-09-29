@@ -5,7 +5,7 @@ import SegmentedControl from './ui/SegmentedControl';
 import Modal from './ui/Modal';
 import LocalVideos from './LocalVideos';
 
-export default function UGCGallery({ local = false }) {
+export default function UGCGallery({ local = false, onOpenSettings }) {
   const [tab, setTab] = useState(local ? 'mine' : 'videos');
   const [mineCount, setMineCount] = useState(null);
   const [videos, setVideos] = useState([]);
@@ -71,7 +71,7 @@ export default function UGCGallery({ local = false }) {
       </div>
 
       {tab === 'mine' ? (
-        <LocalVideos onCount={setMineCount} />
+        <LocalVideos onCount={setMineCount} onOpenSettings={onOpenSettings} />
       ) : loading ? (
         <div className="flex items-center justify-center h-64">
           <Loader2 size={24} className="animate-spin text-brass" />

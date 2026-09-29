@@ -1,16 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { Film, Download, Trash2, Loader2 } from 'lucide-react';
+import { Film, Download, Trash2, Loader2, Youtube } from 'lucide-react';
 import { apiJson } from '../lib/api';
 import { getApiUrl } from '../config';
+import YouTubeUploadModal, { YouTubeMark } from './YouTubeUploadModal';
 
 const mmss = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
 
 // Self-host: everything finished in output/ (clip jobs and UGC videos), with
 // delete per job. The cloud build has the History tab instead.
-export default function LocalVideos({ onCount }) {
+export default function LocalVideos({ onCount, onOpenSettings }) {
   const [jobs, setJobs] = useState(null);
   const [deleting, setDeleting] = useState('');
   const [error, setError] = useState('');
+  const [ytTarget, setYtTarget] = useState(null); // { job, v }
 
   useEffect(() => {
     apiJson('/api/local/videos')
@@ -71,6 +73,23 @@ export default function LocalVideos({ onCount }) {
 
   return (
     <div className="space-y-8">
+      <YouTubeUploadModal
+        isOpen={!!ytTarget}
+        onClose={() => setYtTarget(null)}
+        clip={ytTarget && { title: ytTarget.v.title, video_description_for_instagram: ytTarget.v.description }}
+        jobId={ytTarget?.job.job_id}
+        index={ytTarget?.v.index}
+        inputFilename={ytTarget?.v.url.split('/').pop()}
+        uploaded={ytTarget?.v.youtube}
+        onOpenSettings={onOpenSettings}
+        onUploaded={(mark) => {
+          const { job, v } = ytTarget;
+          setJobs((js) => js.map((j) => (j.job_id !== job.job_id ? j : {
+            ...j, videos: j.videos.map((x) => (x.index === v.index ? { ...x, youtube: mark } : x)),
+          })));
+          setYtTarget((t) => t && { ...t, v: { ...t.v, youtube: mark } });
+        }}
+      />
       {error && <p className="text-sm text-warn">{error}</p>}
       {jobs.map((job) => (
         <div key={job.job_id}>
@@ -95,6 +114,7 @@ export default function LocalVideos({ onCount }) {
             {job.videos.map((v, i) => (
               <div key={v.url} className="card overflow-hidden relative">
                 <span className="absolute top-2 left-2 z-10 badge-brass font-mono">#{i + 1}</span>
+                <YouTubeMark mark={v.youtube} className="absolute top-2 right-2 z-10" />
                 <video src={getApiUrl(v.url)} controls preload="metadata" className="w-full aspect-[9/16] bg-black object-contain" />
                 <div className="p-2 flex items-start justify-between gap-2">
                   <div className="min-w-0">
@@ -104,6 +124,13 @@ export default function LocalVideos({ onCount }) {
                     )}
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
+                    {job.kind === 'clips' && v.index != null && (
+                      <button onClick={() => setYtTarget({ job, v })}
+                        className={v.youtube ? 'text-ok hover:text-brass' : 'text-muted hover:text-brass'}
+                        title={v.youtube ? 'On YouTube: upload again' : 'Upload to YouTube'}>
+                        <Youtube size={14} />
+                      </button>
+                    )}
                     <a href={getApiUrl(v.url)} download className="text-muted hover:text-ink" title="Download">
                       <Download size={14} />
                     </a>

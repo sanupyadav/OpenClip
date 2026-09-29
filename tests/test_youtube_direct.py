@@ -93,3 +93,23 @@ def test_upload_needs_a_connection_and_stays_inside_the_job_dir(ytapp, monkeypat
         assert e.value.status_code == 404  # basename "passwd" is not in output/j1
     finally:
         app.jobs.pop("j1", None)
+
+
+def test_upload_from_the_gallery_records_the_mark(ytapp, monkeypatch):
+    # A job the server no longer holds in memory: the clip comes from the metadata on disk.
+    monkeypatch.setattr(app, "OUTPUT_DIR", str(ytapp))
+    monkeypatch.setattr(app, "_local_job_running", lambda name: False)
+    job = ytapp / "jobX"
+    job.mkdir()
+    (job / "clip_0.mp4").write_bytes(b"v")
+    (job / "src_metadata.json").write_text(json.dumps(
+        {"shorts": [{"video_url": "/videos/jobX/clip_0.mp4", "video_title_for_youtube_short": "T"}]}))
+    yt.save(app._YT_FILE, {"client_id": "i", "client_secret": "s", "refresh_token": "r"})
+    monkeypatch.setattr(app, "_yt_upload_blocking", lambda cfg, path, meta: "abc123")
+    out = asyncio.run(app.youtube_upload(app.YouTubeUploadRequest(job_id="jobX", clip_index=0, title="T"), None))
+    assert out["url"] == "https://youtube.com/shorts/abc123"
+    assert asyncio.run(app.youtube_uploads("jobX"))["uploads"]["0"]["videoId"] == "abc123"
+    gallery = asyncio.run(app.list_local_videos())["jobs"][0]["videos"][0]
+    assert gallery["youtube"]["videoId"] == "abc123"
+    with pytest.raises(app.HTTPException):
+        asyncio.run(app.youtube_uploads("../etc"))

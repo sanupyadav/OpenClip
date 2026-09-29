@@ -9,7 +9,7 @@ import Modal from './ui/Modal';
 import SegmentedControl from './ui/SegmentedControl';
 import WatermarkModal, { watermarkNoticeDismissed } from './WatermarkModal';
 import TikTokDraftNotice from './TikTokDraftNotice';
-import YouTubeUploadModal from './YouTubeUploadModal';
+import YouTubeUploadModal, { YouTubeMark } from './YouTubeUploadModal';
 import { useAuth } from '../contexts/AuthContext';
 import { renderInBrowser } from '../lib/renderInBrowser';
 
@@ -58,6 +58,16 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     const [showWatermarkModal, setShowWatermarkModal] = useState(false);
     const { plan, billingEnabled } = useAuth();
     const [showYouTube, setShowYouTube] = useState(false);
+    const [ytMark, setYtMark] = useState(null);
+    useEffect(() => {
+        if (billingEnabled || !jobId) return;
+        let alive = true;
+        apiFetch(`/api/youtube/uploads/${encodeURIComponent(jobId)}`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((d) => { if (alive) setYtMark(d?.uploads?.[String(index)] || null); })
+            .catch(() => {});
+        return () => { alive = false; };
+    }, [billingEnabled, jobId, index]);
     const videoRef = React.useRef(null);
     // Pristine base clip (no burned subtitles/hook), stable regardless of how
     // clip.video_url mutates after server edits. Used as the compositing base
@@ -860,6 +870,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                         </div>
                     )}
                     <div className="flex flex-wrap gap-1.5">
+                        <YouTubeMark mark={ytMark} className="shrink-0" />
                         {durationReadout && <span className="readout bg-paper3 px-2 py-0.5 rounded-full shrink-0">{durationReadout}</span>}
                         {resolution && <span className="readout bg-paper3 px-2 py-0.5 rounded-full shrink-0">{resolution}</span>}
                         <span className="readout bg-paper3 px-2 py-0.5 rounded-full shrink-0">#shorts</span>
@@ -979,7 +990,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     </button>
                     {!billingEnabled && (
                         <button onClick={() => setShowYouTube(true)} className={QUIET_BTN} title="Upload straight to your YouTube channel">
-                            <Youtube size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" /> youtube
+                            <Youtube size={16} className={`${ytMark ? 'text-ok' : 'text-muted'} group-hover:text-brass transition-colors shrink-0`} /> {ytMark ? 'youtube ✓' : 'youtube'}
                         </button>
                     )}
                     <button
@@ -1170,6 +1181,8 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                 index={index}
                 inputFilename={serverVideoFile}
                 onOpenSettings={onOpenSettings}
+                uploaded={ytMark}
+                onUploaded={setYtMark}
             />
 
             <SubtitleModal

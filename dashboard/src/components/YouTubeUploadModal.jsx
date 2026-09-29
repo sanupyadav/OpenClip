@@ -3,10 +3,21 @@ import { Youtube, Loader2, Check, ExternalLink, AlertTriangle } from 'lucide-rea
 import Modal from './ui/Modal';
 import { apiJson } from '../lib/api';
 
+// The "already on YouTube" mark, linking to the video.
+export function YouTubeMark({ mark, className = '' }) {
+    if (!mark?.url) return null;
+    return (
+        <a href={mark.url} target="_blank" rel="noopener noreferrer" title={`On YouTube (${mark.privacy})`}
+            className={`badge-ok inline-flex items-center gap-1 ${className}`}>
+            <Youtube size={11} /> on youtube <Check size={11} />
+        </a>
+    );
+}
+
 // Self-host: upload one clip straight to the user's YouTube channel with their
 // own Google OAuth client (Settings → YouTube direct). Separate from the
-// Upload-Post "post" flow on purpose.
-export default function YouTubeUploadModal({ isOpen, onClose, clip, jobId, index, inputFilename, onOpenSettings }) {
+// Upload-Post "post" flow on purpose. onUploaded gets the saved mark.
+export default function YouTubeUploadModal({ isOpen, onClose, clip, jobId, index, inputFilename, onOpenSettings, uploaded = null, onUploaded }) {
     const [status, setStatus] = useState(null);
     const [title, setTitle] = useState('');
     const [description, setDescription] = useState('');
@@ -30,7 +41,7 @@ export default function YouTubeUploadModal({ isOpen, onClose, clip, jobId, index
         setBusy(true);
         setError('');
         try {
-            setResult(await apiJson('/api/youtube/upload', {
+            const res = await apiJson('/api/youtube/upload', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -39,7 +50,9 @@ export default function YouTubeUploadModal({ isOpen, onClose, clip, jobId, index
                     tags: tags.split(',').map((t) => t.trim()).filter(Boolean),
                     publish_at: schedule ? new Date(schedule).toISOString() : null,
                 }),
-            }));
+            });
+            setResult(res);
+            onUploaded?.(res);
         } catch (e) {
             setError(e.message || 'Upload failed');
         } finally {
@@ -72,6 +85,11 @@ export default function YouTubeUploadModal({ isOpen, onClose, clip, jobId, index
             ) : (
                 <div className="space-y-3">
                     <p className="text-xs text-muted">Channel: <span className="text-ink">{status.channel || 'connected'}</span></p>
+                    {uploaded?.url && (
+                        <p className="text-xs text-muted flex flex-wrap items-center gap-2">
+                            Already uploaded: <YouTubeMark mark={uploaded} /> Uploading again makes a second video.
+                        </p>
+                    )}
                     <input className="input-field" maxLength={100} placeholder="Title" value={title} onChange={(e) => setTitle(e.target.value)} />
                     <textarea className="input-field min-h-[90px]" placeholder="Description (#Shorts is added)" value={description}
                         onChange={(e) => setDescription(e.target.value)} />

@@ -2760,6 +2760,7 @@ async def list_local_videos():
             except (OSError, ValueError):
                 data = {}
             clips = data.get("shorts", [])
+            yt_marks = _yt.load(os.path.join(path, ".youtube_uploads.json"))
             base = os.path.basename(meta[0]).replace("_metadata.json", "")
             source = os.path.splitext(data.get("source_video") or base)[0].replace("_", " ")
             for i, c in enumerate(clips):
@@ -2767,7 +2768,10 @@ async def list_local_videos():
                     continue
                 url = c.get("video_url") or f"/videos/{name}/{_canonical_clip_file(path, base, i)}"
                 videos.append({"url": url, "index": i, "start": c.get("start"), "end": c.get("end"),
-                               "title": c.get("video_title_for_youtube_short") or c.get("title") or f"Clip {i + 1}"})
+                               "title": c.get("video_title_for_youtube_short") or c.get("title") or f"Clip {i + 1}",
+                               "description": c.get("video_description_for_instagram")
+                                              or c.get("video_description_for_tiktok") or "",
+                               "youtube": yt_marks.get(str(i))})
             # Numbered in the order the moments happen in the source video.
             videos.sort(key=lambda v: v["start"] if v["start"] is not None else 0)
         videos += [{"url": f"/videos/{name}/{os.path.basename(v)}", "title": "UGC video"}
@@ -5727,20 +5731,53 @@ def _yt_upload_blocking(cfg, file_path, meta):
     return _yt.upload(token, file_path, meta)
 
 
+_YT_MARKS = ".youtube_uploads.json"  # per job dir: {clip index: {videoId, url, privacy, at}}
+
+
+def _yt_job_dir(job_id: str) -> str:
+    if not job_id or job_id != os.path.basename(job_id) or job_id.startswith("."):
+        raise HTTPException(status_code=404, detail="Job not found")
+    return os.path.join(OUTPUT_DIR, job_id)
+
+
+def _yt_marks(job_id: str) -> dict:
+    return _yt.load(os.path.join(_yt_job_dir(job_id), _YT_MARKS))
+
+
+def _yt_clip_file(job_id: str, clip_index: int, input_filename: Optional[str]) -> Optional[str]:
+    """The clip's file name: the one on screen, else the job in memory, else
+    the metadata on disk (the gallery lists jobs the server no longer holds)."""
+    if input_filename:
+        return os.path.basename(input_filename)
+    clips = (((jobs.get(job_id) or {}).get("result") or {}).get("clips")) or []
+    if not clips:
+        meta = glob.glob(os.path.join(_yt_job_dir(job_id), "*_metadata.json"))
+        if meta:
+            clips = (_yt.load(meta[0]) or {}).get("shorts") or []
+    if 0 <= clip_index < len(clips):
+        return os.path.basename((clips[clip_index].get("video_url") or "").split("/")[-1]) or None
+    return None
+
+
+@app.get("/api/youtube/uploads/{job_id}")
+async def youtube_uploads(job_id: str):
+    """Which clips of this job are already on YouTube (the mark on the cards)."""
+    _yt_self_host()
+    return {"uploads": _yt_marks(job_id)}
+
+
 @app.post("/api/youtube/upload")
 async def youtube_upload(req: YouTubeUploadRequest, request: Request):
     _yt_self_host()
     cfg = _yt.load(_YT_FILE)
     if not cfg.get("refresh_token"):
         raise HTTPException(status_code=400, detail="Connect YouTube in Settings first")
-    await _ensure_job_files(req.job_id, request)
-    job = jobs.get(req.job_id)
-    clips = ((job or {}).get("result") or {}).get("clips") or []
-    if not 0 <= req.clip_index < len(clips):
-        raise HTTPException(status_code=404, detail="Clip not found")
-    # basename: the file must be one of this job's own outputs.
-    name = os.path.basename(req.input_filename or clips[req.clip_index].get("video_url", "").split("/")[-1])
-    file_path = os.path.join(OUTPUT_DIR, req.job_id, name)
+    job_dir = _yt_job_dir(req.job_id)
+    if req.job_id in jobs:
+        await _ensure_job_files(req.job_id, request)
+    # basename only: the file must be one of this job's own outputs.
+    name = _yt_clip_file(req.job_id, req.clip_index, req.input_filename)
+    file_path = os.path.join(job_dir, name or "")
     if not name or not os.path.isfile(file_path):
         raise HTTPException(status_code=404, detail="Video file not found")
     try:
@@ -5748,8 +5785,15 @@ async def youtube_upload(req: YouTubeUploadRequest, request: Request):
         video_id = await asyncio.to_thread(_yt_upload_blocking, cfg, file_path, meta)
     except _yt.YouTubeError as e:
         raise HTTPException(status_code=400, detail=f"YouTube: {e}")
-    return {"videoId": video_id, "url": f"https://youtube.com/shorts/{video_id}",
-            "privacy": meta["status"]["privacyStatus"]}
+    mark = {"videoId": video_id, "url": f"https://youtube.com/shorts/{video_id}",
+            "privacy": meta["status"]["privacyStatus"], "at": time.time()}
+    marks = _yt_marks(req.job_id)
+    marks[str(req.clip_index)] = mark
+    try:
+        _yt.save(os.path.join(job_dir, _YT_MARKS), marks)
+    except OSError as e:
+        print(f"⚠️ Could not record the YouTube upload for {req.job_id}: {e}")
+    return mark
 
 
 class SocialPostRequest(BaseModel):

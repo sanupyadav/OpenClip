@@ -25,13 +25,21 @@ def _clean_encoder_state(monkeypatch):
     reset_encoder_cache()
 
 
-def test_default_args_pin_historical_x264_settings():
+def test_default_args_pin_historical_x264_settings(monkeypatch):
+    monkeypatch.setenv("FFMPEG_ENCODER", "x264")
     assert video_encode_args(QUALITY) == [
         "-c:v", "libx264", "-preset", "medium", "-crf", "18"]
     assert video_encode_args(QUALITY_FAST) == [
         "-c:v", "libx264", "-preset", "fast", "-crf", "18"]
     assert video_encode_args(DELIVERY) == [
         "-c:v", "libx264", "-preset", "fast", "-crf", "22"]
+
+
+def test_default_uses_nvenc_when_the_gpu_has_it(monkeypatch):
+    monkeypatch.setattr(ffmpeg_utils, "nvenc_available", lambda: True)
+    assert video_encode_args(QUALITY)[:2] == ["-c:v", "h264_nvenc"]
+    monkeypatch.setattr(ffmpeg_utils, "nvenc_available", lambda: False)
+    assert video_encode_args(QUALITY)[:2] == ["-c:v", "libx264"]
 
 
 def test_unknown_tier_raises():

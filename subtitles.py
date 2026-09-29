@@ -1,3 +1,4 @@
+import functools
 import os
 import re
 import subprocess
@@ -15,12 +16,26 @@ _STDIO_CONFIGURED = False
 DEFAULT_WHISPER_MODEL = "small"
 
 
+@functools.lru_cache(maxsize=1)
+def _default_whisper_device():
+    """"cuda" when CTranslate2 sees a GPU, else "cpu". A broken CUDA setup
+    still ends on CPU: run_whisper_transcription retries there on failure."""
+    try:
+        import ctranslate2
+        return "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
+    except Exception:
+        return "cpu"
+
+
 def get_whisper_config():
-    """Return the faster-whisper model config, overridable via env vars."""
+    """Return the faster-whisper model config, overridable via env vars.
+    Defaults to the GPU (float16) when there is one, else CPU (int8)."""
+    device = os.environ.get("WHISPER_DEVICE") or _default_whisper_device()
     return {
         "model_size": os.environ.get("WHISPER_MODEL", DEFAULT_WHISPER_MODEL),
-        "device": os.environ.get("WHISPER_DEVICE", "cpu"),
-        "compute_type": os.environ.get("WHISPER_COMPUTE", "int8"),
+        "device": device,
+        "compute_type": os.environ.get("WHISPER_COMPUTE")
+                        or ("float16" if device == "cuda" else "int8"),
     }
 
 

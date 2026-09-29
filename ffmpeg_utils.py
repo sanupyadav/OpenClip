@@ -1,10 +1,10 @@
 """Central video-encoder selection for every ffmpeg encode call site.
 
 FFMPEG_ENCODER env values:
-  x264  (default) — CPU libx264, exact pre-GPU behavior
+  auto  (default) — h264_nvenc when the probe succeeds, else x264
+  x264            — CPU libx264, exact pre-GPU behavior
   nvenc           — force h264_nvenc; probed once and falls back to x264
                     (with a warning) if the GPU/driver is unavailable
-  auto            — h264_nvenc when the probe succeeds, else x264
 
 Only the codec/quality args live here; surrounding args (-movflags, -pix_fmt,
 audio codecs, filters) stay at each call site.
@@ -190,7 +190,7 @@ def video_encode_args(tier=QUALITY):
     if tier not in _X264_ARGS:
         raise ValueError(f"Unknown encode tier: {tier!r}")
 
-    mode = os.environ.get("FFMPEG_ENCODER", "x264").strip().lower()
+    mode = os.environ.get("FFMPEG_ENCODER", "auto").strip().lower()
     use_nvenc = False
     if mode in ("nvenc", "auto"):
         use_nvenc = nvenc_available()
@@ -289,7 +289,7 @@ def _source_format(path):
 def _gpu_cut_ok(input_video):
     if os.environ.get("FFMPEG_GPU_CUT", "1").strip() == "0":
         return False
-    if os.environ.get("FFMPEG_ENCODER", "x264").strip().lower() not in ("nvenc", "auto"):
+    if os.environ.get("FFMPEG_ENCODER", "auto").strip().lower() not in ("nvenc", "auto"):
         return False
     if input_video not in _gpu_cut_sources:
         fmt = _source_format(input_video) if nvenc_available() else None

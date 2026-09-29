@@ -5590,6 +5590,168 @@ async def translate_clip(
         "new_video_url": f"/videos/{req.job_id}/{output_filename}"
     }
 
+# --- Direct YouTube upload (self-host, the user's own Google OAuth client) ---
+# Separate from the Upload-Post flow below on purpose. See youtube_direct.py.
+import secrets as _secrets
+from html import escape as html_escape
+import youtube_direct as _yt
+
+_YT_FILE = os.path.join(OUTPUT_DIR, ".youtube.json")
+_yt_states = {}  # OAuth state -> (redirect_uri, created); in memory, a login is minutes
+
+
+def _yt_self_host():
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Not Found")
+
+
+def _yt_status(cfg=None):
+    cfg = _yt.load(_YT_FILE) if cfg is None else cfg
+    return {"configured": bool(cfg.get("client_id") and cfg.get("client_secret")),
+            "clientId": cfg.get("client_id", ""), "hasSecret": bool(cfg.get("client_secret")),
+            "connected": bool(cfg.get("refresh_token")), "channel": cfg.get("channel")}
+
+
+@app.get("/api/youtube/status")
+async def youtube_status():
+    _yt_self_host()
+    return _yt_status()
+
+
+class YouTubeClientRequest(BaseModel):
+    client_id: str
+    client_secret: Optional[str] = None  # blank keeps the saved one
+
+
+@app.put("/api/youtube/client")
+async def youtube_set_client(req: YouTubeClientRequest):
+    _yt_self_host()
+    cfg = _yt.load(_YT_FILE)
+    client_id = req.client_id.strip()
+    if not client_id.endswith(".apps.googleusercontent.com"):
+        raise HTTPException(status_code=400, detail="That is not a Google OAuth client ID (…apps.googleusercontent.com)")
+    if client_id != cfg.get("client_id"):
+        cfg.pop("refresh_token", None)  # a login belongs to the client that made it
+        cfg.pop("channel", None)
+    cfg["client_id"] = client_id
+    if req.client_secret and req.client_secret.strip():
+        cfg["client_secret"] = req.client_secret.strip()
+    _yt.save(_YT_FILE, cfg)
+    return _yt_status(cfg)
+
+
+class YouTubeAuthRequest(BaseModel):
+    redirect_uri: str
+
+
+@app.post("/api/youtube/auth")
+async def youtube_auth(req: YouTubeAuthRequest):
+    """The Google consent URL. The redirect URI is the dashboard's own origin
+    (localhost or the tunnel), which must be listed on the OAuth client."""
+    _yt_self_host()
+    cfg = _yt.load(_YT_FILE)
+    if not (cfg.get("client_id") and cfg.get("client_secret")):
+        raise HTTPException(status_code=400, detail="Save the OAuth client ID and secret first")
+    uri = req.redirect_uri.strip()
+    if not (uri.startswith(("http://", "https://")) and uri.endswith(_yt.CALLBACK_PATH)):
+        raise HTTPException(status_code=400, detail=f"The redirect URI must end with {_yt.CALLBACK_PATH}")
+    now = time.time()
+    for s, (_, t) in list(_yt_states.items()):
+        if now - t > 900:
+            _yt_states.pop(s, None)
+    state = _secrets.token_urlsafe(24)
+    _yt_states[state] = (uri, now)
+    return {"url": _yt.auth_url(cfg["client_id"], uri, state)}
+
+
+def _yt_callback_page(ok: bool, message: str):
+    # A popup: tell the dashboard and close; a plain tab just shows the text.
+    safe = html_escape(message)
+    return HTMLResponse(
+        f"<!doctype html><meta charset=utf-8><title>YouTube</title>"
+        f"<body style='font-family:sans-serif;padding:2rem'><p>{safe}</p>"
+        f"<script>try{{window.opener&&window.opener.postMessage({{type:'youtube-auth',ok:{str(ok).lower()}}},'*')}}catch(e){{}}"
+        f"{'setTimeout(function(){window.close()},1200)' if ok else ''}</script></body>",
+        status_code=200 if ok else 400)
+
+
+@app.get("/api/youtube/callback")
+async def youtube_callback(state: str = "", code: str = "", error: str = ""):
+    _yt_self_host()
+    entry = _yt_states.pop(state, None)
+    if error:
+        return _yt_callback_page(False, f"Google said: {error}. Close this window and try again.")
+    if not entry or not code:
+        return _yt_callback_page(False, "This login link expired or was already used. Press Connect again.")
+    cfg = _yt.load(_YT_FILE)
+    try:
+        tokens = await asyncio.to_thread(_yt.exchange_code, cfg.get("client_id"), cfg.get("client_secret"),
+                                         code, entry[0])
+    except _yt.YouTubeError as e:
+        return _yt_callback_page(False, f"Could not finish the login: {e}")
+    if not tokens.get("refresh_token"):
+        return _yt_callback_page(False, "Google sent no refresh token. Remove openClip from "
+                                        "myaccount.google.com/permissions and connect again.")
+    cfg["refresh_token"] = tokens["refresh_token"]
+    cfg["channel"] = await asyncio.to_thread(_yt.channel_title, tokens.get("access_token", ""))
+    _yt.save(_YT_FILE, cfg)
+    return _yt_callback_page(True, f"Connected{' to ' + cfg['channel'] if cfg['channel'] else ''}. "
+                                   "You can close this window.")
+
+
+@app.delete("/api/youtube/connection")
+async def youtube_disconnect():
+    _yt_self_host()
+    cfg = _yt.load(_YT_FILE)
+    token = cfg.pop("refresh_token", None)
+    cfg.pop("channel", None)
+    _yt.save(_YT_FILE, cfg)
+    if token:
+        await asyncio.to_thread(_yt.revoke, token)
+    return _yt_status(cfg)
+
+
+class YouTubeUploadRequest(BaseModel):
+    job_id: str
+    clip_index: int
+    input_filename: Optional[str] = None  # the edited file on screen (hook, captions)
+    title: str = ""
+    description: str = ""
+    tags: List[str] = []
+    privacy: str = "public"
+    publish_at: Optional[str] = None  # ISO-8601 UTC; makes it a scheduled private video
+
+
+def _yt_upload_blocking(cfg, file_path, meta):
+    token = _yt.access_token(cfg["client_id"], cfg["client_secret"], cfg["refresh_token"])
+    return _yt.upload(token, file_path, meta)
+
+
+@app.post("/api/youtube/upload")
+async def youtube_upload(req: YouTubeUploadRequest, request: Request):
+    _yt_self_host()
+    cfg = _yt.load(_YT_FILE)
+    if not cfg.get("refresh_token"):
+        raise HTTPException(status_code=400, detail="Connect YouTube in Settings first")
+    await _ensure_job_files(req.job_id, request)
+    job = jobs.get(req.job_id)
+    clips = ((job or {}).get("result") or {}).get("clips") or []
+    if not 0 <= req.clip_index < len(clips):
+        raise HTTPException(status_code=404, detail="Clip not found")
+    # basename: the file must be one of this job's own outputs.
+    name = os.path.basename(req.input_filename or clips[req.clip_index].get("video_url", "").split("/")[-1])
+    file_path = os.path.join(OUTPUT_DIR, req.job_id, name)
+    if not name or not os.path.isfile(file_path):
+        raise HTTPException(status_code=404, detail="Video file not found")
+    try:
+        meta = _yt.metadata(req.title, req.description, req.tags, req.privacy, req.publish_at)
+        video_id = await asyncio.to_thread(_yt_upload_blocking, cfg, file_path, meta)
+    except _yt.YouTubeError as e:
+        raise HTTPException(status_code=400, detail=f"YouTube: {e}")
+    return {"videoId": video_id, "url": f"https://youtube.com/shorts/{video_id}",
+            "privacy": meta["status"]["privacyStatus"]}
+
+
 class SocialPostRequest(BaseModel):
     job_id: str
     clip_index: int

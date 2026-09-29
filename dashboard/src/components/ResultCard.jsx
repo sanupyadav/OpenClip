@@ -9,6 +9,7 @@ import Modal from './ui/Modal';
 import SegmentedControl from './ui/SegmentedControl';
 import WatermarkModal, { watermarkNoticeDismissed } from './WatermarkModal';
 import TikTokDraftNotice from './TikTokDraftNotice';
+import YouTubeUploadModal from './YouTubeUploadModal';
 import { useAuth } from '../contexts/AuthContext';
 import { renderInBrowser } from '../lib/renderInBrowser';
 
@@ -36,7 +37,7 @@ function formatDuration(clip) {
     return `${String(Math.floor(secs / 60)).padStart(2, '0')}:${String(secs % 60).padStart(2, '0')}`;
 }
 
-export default function ResultCard({ clip, index, jobId, durable, uploadPostKey, uploadUserId, geminiApiKey, elevenLabsKey, isManaged, onPlay, onPause, onBulkSubtitle, clipCount = 1, bulkProgress, initialState = null, onStateChange, connectedPlatforms = null, onConnectSocials, onEditClip = null, onReframeClip = null }) {
+export default function ResultCard({ clip, index, jobId, durable, uploadPostKey, uploadUserId, geminiApiKey, elevenLabsKey, isManaged, onPlay, onPause, onBulkSubtitle, clipCount = 1, bulkProgress, initialState = null, onStateChange, connectedPlatforms = null, onConnectSocials, onEditClip = null, onReframeClip = null, onOpenSettings = null }) {
     const [showModal, setShowModal] = useState(false);
     // The "why" line is clamped to two lines so cards in a row stay level;
     // when it overflows, a hover (desktop) or tap (touch) shows the whole
@@ -55,7 +56,8 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     const [showDescModal, setShowDescModal] = useState(false);
     const [showSubtitleModal, setShowSubtitleModal] = useState(false);
     const [showWatermarkModal, setShowWatermarkModal] = useState(false);
-    const { plan } = useAuth();
+    const { plan, billingEnabled } = useAuth();
+    const [showYouTube, setShowYouTube] = useState(false);
     const videoRef = React.useRef(null);
     // Pristine base clip (no burned subtitles/hook), stable regardless of how
     // clip.video_url mutates after server edits. Used as the compositing base
@@ -975,6 +977,11 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     >
                         <Share2 size={16} className="shrink-0" /> post
                     </button>
+                    {!billingEnabled && (
+                        <button onClick={() => setShowYouTube(true)} className={QUIET_BTN} title="Upload straight to your YouTube channel">
+                            <Youtube size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" /> youtube
+                        </button>
+                    )}
                     <button
                         onClick={(e) => {
                             e.preventDefault();
@@ -1154,6 +1161,16 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     )}
                 </div>
             </Modal>
+
+            <YouTubeUploadModal
+                isOpen={showYouTube}
+                onClose={() => setShowYouTube(false)}
+                clip={clip}
+                jobId={jobId}
+                index={index}
+                inputFilename={serverVideoFile}
+                onOpenSettings={onOpenSettings}
+            />
 
             <SubtitleModal
                 isOpen={showSubtitleModal}

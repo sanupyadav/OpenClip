@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Square, Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Menu, Lock, Rocket } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import LocalLlmCard, { LlmGatewayForm } from './components/LocalLlmCard';
+import YouTubeDirectCard from './components/YouTubeDirectCard';
 import QueueTab from './components/QueueTab';
 import ElapsedTimer from './components/ElapsedTimer';
 import { jobProgress } from './lib/jobProgress';
@@ -1559,6 +1560,7 @@ function App() {
               ) : (
                 <>
               {!billingEnabled && <LocalLlmCard llm={localLlm} settings={llmSettings} onSaved={setLlm} />}
+              {!billingEnabled && <YouTubeDirectCard />}
               <KeyInput onKeySet={setApiKey} savedKey={apiKey} />
 
               <div className="card p-4 sm:p-6 mt-8">
@@ -2265,6 +2267,7 @@ function App() {
                           jobId={jobId}
                           onEditClip={(index) => setEditingClip(index)}
                           onReframeClip={(index) => setReframingClip(index)}
+                          onOpenSettings={() => goToTab('settings')}
                           initialState={projectState?.clips?.find((c) => c.index === i) || null}
                           onStateChange={handleClipStateChange}
                           durable={durableClips[i]}

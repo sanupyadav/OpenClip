@@ -41,6 +41,23 @@ All are optional; keys stay in your Kaggle account and never in the notebook.
 | `GEMINI_API_KEY` | Gemini as the model; also layout picking and on-screen hooks |
 | `YOUTUBE_COOKIES` | Netscape-format cookies, when YouTube asks Kaggle to "confirm you're not a bot" |
 
+## Post to YouTube (free)
+
+Clips can go straight to your channel through the YouTube Data API with your own Google project,
+no Upload-Post needed. The dashboard's **Settings → YouTube (direct)** card walks through it:
+
+1. [Google Cloud Console](https://console.cloud.google.com/apis/library/youtube.googleapis.com): create a
+   project and enable **YouTube Data API v3**.
+2. **OAuth consent screen**: External, add your Google account as a **Test user**.
+3. **Credentials → Create OAuth client ID → Web application**, and add the **Authorized redirect URI**
+   the card shows (`https://….trycloudflare.com/api/youtube/callback`; a new Kaggle tunnel is a new URI,
+   add it too).
+4. Paste the client ID and secret in the card, **Save client**, **Connect YouTube**.
+5. Every clip now has a **youtube** button: title, description, tags, privacy, optional schedule.
+
+Free quota is ~6 uploads a day. Google keeps uploads from a project it has not audited **private**:
+make them public in YouTube Studio, or pass Google's free YouTube API audit.
+
 ## What the notebook does
 
 | Cell | Does |

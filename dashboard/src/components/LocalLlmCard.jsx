@@ -89,6 +89,10 @@ function OllamaSection({ ollama, useOllama, onSaved }) {
     useEffect(() => { if (ollama?.url) loadModels(); }, []);
 
     const save = async (enabled) => {
+        if (enabled && !model.trim()) {
+            setError('Pick a model first: press Models to load the ones installed in Ollama, or type one.');
+            return;
+        }
         setSaving(true);
         setError('');
         try {
@@ -106,7 +110,7 @@ function OllamaSection({ ollama, useOllama, onSaved }) {
         <div className="space-y-2">
             <div className="flex items-center justify-between gap-3">
                 <p className="text-sm text-ink">Use Ollama for clip picking</p>
-                <Switch checked={!!useOllama} disabled={saving || (!useOllama && !model)}
+                <Switch checked={!!useOllama} disabled={saving}
                     onChange={(v) => save(v)} label="Use Ollama" />
             </div>
             <div className="flex gap-2">

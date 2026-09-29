@@ -78,3 +78,10 @@ def test_ollama_needs_a_model_to_turn_on_and_off_without_gateway_means_gemini(cl
     _ollama(url="http://localhost:11434", model="qwen2.5", enabled=True)
     assert _ollama(url="http://localhost:11434", model="qwen2.5", enabled=False)["localLlm"] is None
     assert "LLM_BASE_URL" not in os.environ
+
+
+def test_unreachable_ollama_is_a_424_with_a_hint_not_a_502(clean):
+    # A tunnel replaces an origin 502 with its own HTML page; 424 gets through.
+    with pytest.raises(app.HTTPException) as e:
+        asyncio.run(app.list_ollama_models(url="http://127.0.0.1:9"))
+    assert e.value.status_code == 424 and "USE_OLLAMA = True" in e.value.detail

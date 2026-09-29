@@ -2724,7 +2724,12 @@ async def list_ollama_models(url: str = "http://localhost:11434"):
             r.raise_for_status()
             names = [m.get("name") for m in (r.json().get("models") or []) if m.get("name")]
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Could not reach Ollama at {url}: {str(e)[:200]}")
+        # 424, not 502: a Cloudflare tunnel swaps an origin 502 for its own
+        # HTML error page, and the dashboard would show that instead of this.
+        raise HTTPException(status_code=424, detail=(
+            f"Ollama is not running at {url} ({str(e)[:120]}). It must run where the backend runs: "
+            "on Kaggle set USE_OLLAMA = True in the notebook config cell and run it again; "
+            "locally start it with `ollama serve`."))
     return {"models": sorted(names)}
 
 

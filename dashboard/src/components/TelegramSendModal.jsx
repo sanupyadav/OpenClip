@@ -77,6 +77,12 @@ export default function TelegramSendModal({ isOpen, onClose, clip, jobId, index,
             ) : result ? (
                 <div className="space-y-3 text-sm">
                     <p className="text-ok flex items-center gap-2"><Check size={16} /> Sent to {result.chat}.</p>
+                    {result.compressedFromMb && (
+                        <p className="text-xs text-muted">
+                            Telegram bots take 50 MB at most, so a compressed copy went: {result.compressedFromMb} MB → {result.sentMb} MB.
+                            The clip here keeps its full quality.
+                        </p>
+                    )}
                     {result.url && (
                         <a href={result.url} target="_blank" rel="noopener noreferrer" className="text-brass hover:underline inline-flex items-center gap-1">
                             {result.url} <ExternalLink size={12} />
@@ -96,14 +102,15 @@ export default function TelegramSendModal({ isOpen, onClose, clip, jobId, index,
                     <input className="input-field" placeholder="Title" value={title} onChange={(e) => setTitle(e.target.value)} />
                     <textarea className="input-field min-h-[90px]" placeholder="Caption" value={description}
                         onChange={(e) => setDescription(e.target.value)} />
-                    <p className="text-[0.7rem] text-muted">Title and caption go together, up to 1,024 characters. Bots can send clips up to 50 MB.</p>
+                    <p className="text-[0.7rem] text-muted">Title and caption go together, up to 1,024 characters. A clip over 50 MB is sent as a
+                        compressed copy under 49 MB (same size on screen, lower bitrate); your clip keeps its full quality.</p>
                     {error && (
                         <p className="text-sm text-warn flex items-start gap-1.5 break-words">
                             <AlertTriangle size={14} className="shrink-0 mt-0.5" /> {error}
                         </p>
                     )}
                     <button onClick={send} disabled={busy} className="btn-primary w-full py-2 text-sm">
-                        {busy ? <><Loader2 size={14} className="animate-spin" /> sending…</> : <><Send size={14} /> send now</>}
+                        {busy ? <><Loader2 size={14} className="animate-spin" /> sending… (a big clip is compressed first)</> : <><Send size={14} /> send now</>}
                     </button>
                 </div>
             )}

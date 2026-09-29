@@ -62,7 +62,8 @@ make them public in YouTube Studio, or pass Google's free YouTube API audit.
 
 **Settings → Telegram**: create a bot with [@BotFather](https://t.me/BotFather) (`/newbot`), paste the token,
 message the bot (or add it to your group / make it admin of your channel), press **Find my chat** and pick it.
-Every clip then has a **telegram** button (up to 50 MB per clip), and sent clips get a mark.
+Every clip then has a **telegram** button, and sent clips get a mark. Bots can send 50 MB at most, so a bigger clip
+goes as a compressed copy under 49 MB (same resolution, lower bitrate); the clip itself keeps full quality.
 
 ## What the notebook does
 

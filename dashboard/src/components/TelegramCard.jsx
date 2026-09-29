@@ -95,7 +95,7 @@ export default function TelegramCard() {
             </div>
 
             <p className="text-xs text-muted mt-4 leading-relaxed">
-                Then every clip gets a <b>telegram</b> button. Free, no limit on the number of clips; a bot can send up to 50 MB per clip.
+                Then every clip gets a <b>telegram</b> button. Free, no limit on the number of clips. A bot can send 50 MB per clip: bigger ones go as a compressed copy under 49 MB, only to Telegram.
             </p>
         </div>
     );

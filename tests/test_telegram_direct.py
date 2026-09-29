@@ -40,7 +40,7 @@ def test_links_for_private_chats_and_errors_are_readable(monkeypatch, tmp_path):
     _mock(monkeypatch, lambda r: httpx.Response(401, json={"ok": False, "description": "Unauthorized"}))
     with pytest.raises(tg.TelegramError, match="Unauthorized"):
         tg.bot_name("bad")
-    big = tmp_path / "big.mp4"
+    big = tmp_path / "big.mp4"  # over the limit and not a real video: cannot be compressed
     with open(big, "wb") as f:
         f.truncate(tg.MAX_BYTES + 1)
     with pytest.raises(tg.TelegramError, match="50 MB"):
@@ -121,3 +121,53 @@ def test_unsend_deletes_the_message_and_the_mark(monkeypatch, tmp_path):
     assert e.value.status_code == 409
     assert asyncio.run(app.telegram_unsend("jobD", 0, forget=True))["forgotten"] is True
     assert asyncio.run(app.telegram_sends("jobD"))["sends"] == {}
+
+
+def test_chat_ids_people_paste_are_normalized():
+    assert tg.normalize_chat_id(" 1003947782883 ") == "-1003947782883"
+    assert tg.normalize_chat_id("-1003947782883") == "-1003947782883"
+    assert tg.normalize_chat_id("1177375146") == "1177375146"  # a user id stays positive
+    assert tg.normalize_chat_id("https://t.me/mychan") == "@mychan"
+    assert tg.normalize_chat_id("@mychan") == "@mychan"
+
+
+def test_chat_not_found_names_the_bot_and_the_fix(monkeypatch, tmp_path):
+    monkeypatch.setattr(app, "BILLING_ENABLED", False)
+    monkeypatch.setattr(app, "_TG_FILE", str(tmp_path / ".telegram.json"))
+    app._yt.save(app._TG_FILE, {"token": "T", "bot": "membixbot"})
+
+    def not_found(token, chat):
+        raise tg.TelegramError("Bad Request: chat not found")
+    monkeypatch.setattr(app._tg, "chat_title", not_found)
+    with pytest.raises(app.HTTPException) as e:
+        asyncio.run(app.telegram_config(app.TelegramConfigRequest(chat_id="1003947782883")))
+    assert "@membixbot" in e.value.detail and "-1003947782883" in e.value.detail
+
+
+def test_a_clip_over_the_limit_is_sent_as_a_compressed_copy(monkeypatch, tmp_path):
+    import shutil
+    import subprocess
+    if not shutil.which("ffmpeg"):
+        pytest.skip("needs ffmpeg")
+    clip = tmp_path / "clip.mp4"  # 6 s of noise at a high bitrate: ~3 MB
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "nullsrc=s=360x640:d=6,geq=random(1)*255:128:128",
+                    "-f", "lavfi", "-i", "sine=d=6", "-c:v", "libx264", "-b:v", "4M", "-c:a", "aac", "-shortest",
+                    str(clip)], check=True)
+    before = clip.read_bytes()
+    monkeypatch.setattr(tg, "MAX_BYTES", 1024 * 1024)       # pretend Telegram's limit is 1 MB
+    monkeypatch.setattr(tg, "FIT_BYTES", 900 * 1024)
+    monkeypatch.setattr(tg.shrink_to_fit, "__defaults__", (900 * 1024,))
+    import ffmpeg_utils
+    monkeypatch.setattr(ffmpeg_utils, "nvenc_available", lambda: False)
+    import tempfile
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))  # so the copy's cleanup is checkable
+    sizes = []
+
+    def handler(req):
+        sizes.append(len(req.read()))
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 1, "chat": {"id": 5}}})
+    _mock(monkeypatch, handler)
+    out = tg.send_video("T", "5", str(clip), "c")
+    assert out["compressedFromMb"] > out["sentMb"] and sizes[0] < 1024 * 1024
+    assert clip.read_bytes() == before  # the original is untouched
+    assert not list(tmp_path.glob("telegram_*"))

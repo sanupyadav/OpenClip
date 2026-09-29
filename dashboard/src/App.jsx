@@ -270,7 +270,7 @@ const pollJob = async (jobId) => {
 
 function App() {
   // Cloud auth/billing session (inert when billing is disabled).
-  const { billingEnabled, isManaged, isSignedIn, me, plan, refreshMe, jobRetentionSeconds, localLlm, setLocalLlm } = useAuth();
+  const { billingEnabled, isManaged, isSignedIn, me, plan, refreshMe, jobRetentionSeconds, localLlm, llmSettings, setLlm } = useAuth();
   const [showLogin, setShowLogin] = useState(false);
   const [showTopUp, setShowTopUp] = useState(false);
   const [showPlanChoice, setShowPlanChoice] = useState(false);
@@ -1558,7 +1558,7 @@ function App() {
                 </div>
               ) : (
                 <>
-              {!billingEnabled && <LocalLlmCard llm={localLlm} onSaved={setLocalLlm} />}
+              {!billingEnabled && <LocalLlmCard llm={localLlm} settings={llmSettings} onSaved={setLlm} />}
               <KeyInput onKeySet={setApiKey} savedKey={apiKey} />
 
               <div className="card p-4 sm:p-6 mt-8">
@@ -2375,9 +2375,10 @@ function App() {
               <Bot size={12} className="text-brass" /> Or use your own AI gateway (OpenAI-compatible)
             </p>
             <LlmGatewayForm
-              llm={localLlm}
-              onSaved={(next) => { setLocalLlm(next); if (next) setShowKeyModal(false); }}
+              gateway={llmSettings?.gateway}
+              onSaved={(res) => { setLlm(res); if (res.localLlm) setShowKeyModal(false); }}
             />
+            <p className="text-xs text-muted">Using Ollama? Set it up in Settings → Current AI model.</p>
           </div>
 
         </div>

@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { apiJson } from '../lib/api';
 import { track } from '../lib/analytics';
+import Switch from './Switch';
 
 // Autopilot: every new video on the user's connected YouTube channel is turned
 // into shorts automatically, and optionally the best ones are scheduled on
@@ -49,23 +50,6 @@ const errText = (e, fallback) => {
 const browserTimezone = () => {
   try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; }
 };
-
-function Switch({ checked, onChange, disabled, label }) {
-  return (
-    <span className="relative inline-flex items-center shrink-0">
-      <input
-        type="checkbox"
-        role="switch"
-        aria-label={label}
-        checked={checked}
-        disabled={disabled}
-        onChange={(e) => onChange(e.target.checked)}
-        className="sr-only peer"
-      />
-      <span className="w-11 h-6 rounded-full bg-paper3 border border-rule2 peer-checked:bg-brass peer-disabled:opacity-40 transition-colors after:content-[''] after:absolute after:left-1 after:top-1 after:w-4 after:h-4 after:rounded-full after:bg-ink after:transition-transform peer-checked:after:translate-x-5" />
-    </span>
-  );
-}
 
 function StatusBadge({ run }) {
   if (!run) return <span className="readout">not clipped</span>;

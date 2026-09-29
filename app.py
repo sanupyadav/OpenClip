@@ -2547,6 +2547,7 @@ async def get_config():
         # Self-host only: tells the dashboard the Gemini key is optional
         # because the moment picker runs on an OpenAI-compatible server.
         "localLlm": None if BILLING_ENABLED else llm_backend.describe(),
+        "llmSettings": None if BILLING_ENABLED else llm_settings(),
     }
 
 
@@ -2573,23 +2574,83 @@ async def test_local_llm():
 
 _LLM_CONFIG_FILE = os.path.join(OUTPUT_DIR, ".llm.json")
 _LLM_ENV = ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL")
+# Self-host model choice, set from the dashboard. Two profiles, so the Ollama
+# toggle can flip between them without retyping the gateway:
+#   gateway: any OpenAI-compatible server (key optional, write-only)
+#   ollama:  a local Ollama (its OpenAI-compatible /v1, no key)
+_llm_state = {"gateway": {}, "ollama": {}, "use_ollama": False}
+
+
+def _v1(url: str) -> str:
+    url = url.strip().rstrip("/")
+    return url if url.endswith("/v1") else url + "/v1"
+
+
+def _apply_llm_state():
+    """Point LLM_* (read by llm_backend here and, through child_env, by every
+    job) at the active profile. No profile at all leaves .env alone."""
+    g, o = _llm_state["gateway"], _llm_state["ollama"]
+    if _llm_state["use_ollama"] and o.get("url") and o.get("model"):
+        os.environ["LLM_BASE_URL"] = _v1(o["url"])
+        os.environ["LLM_MODEL"] = o["model"]
+        os.environ.pop("LLM_API_KEY", None)  # llm_backend sends the "ollama" placeholder
+    elif g.get("LLM_BASE_URL"):
+        for name in _LLM_ENV:
+            if g.get(name):
+                os.environ[name] = g[name]
+            else:
+                os.environ.pop(name, None)
+    elif g.get("cleared"):
+        for name in _LLM_ENV:
+            os.environ.pop(name, None)
+
+
+def _save_llm_state():
+    try:
+        fd = os.open(_LLM_CONFIG_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump(_llm_state, f)
+    except OSError as e:
+        print(f"⚠️ Could not save the LLM settings: {e}")
 
 
 def _load_saved_llm():
-    """Self-host: the gateway saved from the dashboard wins over .env, so a
-    change made in the UI survives a restart. Jobs inherit it via child_env."""
+    """Self-host: what was saved from the dashboard wins over .env, so a
+    change made in the UI survives a restart. With nothing saved the gateway
+    profile starts as whatever .env configured."""
     try:
         with open(_LLM_CONFIG_FILE) as f:
             saved = json.load(f)
     except (OSError, ValueError):
-        return
-    for name in _LLM_ENV:
-        if saved.get(name):
-            os.environ[name] = saved[name]
+        saved = None
+    if saved and "gateway" not in saved:  # first format: the flat LLM_* keys
+        saved = {"gateway": {k: saved.get(k, "") for k in _LLM_ENV}}
+    if saved:
+        _llm_state["gateway"] = saved.get("gateway") or {}
+        _llm_state["ollama"] = saved.get("ollama") or {}
+        _llm_state["use_ollama"] = bool(saved.get("use_ollama"))
+    else:
+        _llm_state["gateway"] = {k: os.environ.get(k, "") for k in _LLM_ENV}
+    _apply_llm_state()
+
+
+def llm_settings():
+    """What the Settings page shows: both profiles and the toggle. The
+    gateway key is write-only and never leaves the server."""
+    g, o = _llm_state["gateway"], _llm_state["ollama"]
+    return {"gateway": {"baseUrl": g.get("LLM_BASE_URL", ""), "model": g.get("LLM_MODEL", ""),
+                        "hasKey": bool(g.get("LLM_API_KEY"))},
+            "ollama": {"url": o.get("url", ""), "model": o.get("model", "")},
+            "useOllama": _llm_state["use_ollama"]}
 
 
 if not BILLING_ENABLED:
     _load_saved_llm()
+
+
+def _check_url(url: str):
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="The server URL must start with http:// or https://")
 
 
 class LlmConfigRequest(BaseModel):
@@ -2600,36 +2661,71 @@ class LlmConfigRequest(BaseModel):
 
 @app.put("/api/llm/config")
 async def set_local_llm(req: LlmConfigRequest):
-    """Self-host dashboard: point the moment picker at an OpenAI-compatible
-    gateway (or clear it with an empty base_url). The key is write-only: it
-    is never sent back, /api/config only says whether one is set."""
+    """Self-host dashboard: the OpenAI-compatible gateway profile (an empty
+    base_url clears it). The key is write-only: /api/config only says
+    whether one is set."""
     if BILLING_ENABLED:
         raise HTTPException(status_code=404, detail="Not Found")
     base = req.base_url.strip().rstrip("/")
     if not base:
-        for name in _LLM_ENV:
-            os.environ.pop(name, None)
-        try:
-            os.remove(_LLM_CONFIG_FILE)
-        except FileNotFoundError:
-            pass
-        return {"localLlm": None}
-    if not base.startswith(("http://", "https://")):
-        raise HTTPException(status_code=400, detail="The server URL must start with http:// or https://")
-    if not base.endswith("/v1"):
-        base += "/v1"  # OpenAI-compatible servers serve /v1/chat/completions
-    os.environ["LLM_BASE_URL"] = base
-    if req.model.strip():
-        os.environ["LLM_MODEL"] = req.model.strip()
-    if req.api_key and req.api_key.strip():
-        os.environ["LLM_API_KEY"] = req.api_key.strip()
+        _llm_state["gateway"] = {"cleared": True}
+    else:
+        _check_url(base)
+        g = _llm_state["gateway"]
+        g.pop("cleared", None)
+        g["LLM_BASE_URL"] = _v1(base)
+        if req.model.strip():
+            g["LLM_MODEL"] = req.model.strip()
+        if req.api_key and req.api_key.strip():
+            g["LLM_API_KEY"] = req.api_key.strip()
+    _apply_llm_state()
+    _save_llm_state()
+    return {"localLlm": llm_backend.describe(), "llmSettings": llm_settings()}
+
+
+class OllamaConfigRequest(BaseModel):
+    url: str = "http://localhost:11434"
+    model: str = ""
+    enabled: bool = False
+
+
+@app.put("/api/llm/ollama")
+async def set_ollama(req: OllamaConfigRequest):
+    """Self-host dashboard: the Ollama profile and the "Use Ollama" toggle.
+    Turning it on needs a model; off falls back to the gateway profile."""
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Not Found")
+    url = req.url.strip().rstrip("/").removesuffix("/v1")
+    if url:
+        _check_url(url)
+    if req.enabled and not (url and req.model.strip()):
+        raise HTTPException(status_code=400, detail="Pick an Ollama model before turning it on")
+    _llm_state["ollama"] = {"url": url, "model": req.model.strip()}
+    was_on, _llm_state["use_ollama"] = _llm_state["use_ollama"], req.enabled
+    if was_on and not req.enabled and not _llm_state["gateway"].get("LLM_BASE_URL"):
+        _llm_state["gateway"] = {"cleared": True}  # nothing to fall back to: back to Gemini
+    _apply_llm_state()
+    _save_llm_state()
+    return {"localLlm": llm_backend.describe(), "llmSettings": llm_settings()}
+
+
+@app.get("/api/llm/ollama/models")
+async def list_ollama_models(url: str = "http://localhost:11434"):
+    """Self-host: the models installed in that Ollama (GET /api/tags), asked
+    from the server because that is where the jobs will call it from."""
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Not Found")
+    url = url.strip().rstrip("/").removesuffix("/v1")
+    _check_url(url)
+    import httpx
     try:
-        fd = os.open(_LLM_CONFIG_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as f:
-            json.dump({name: os.environ.get(name, "") for name in _LLM_ENV}, f)
-    except OSError as e:
-        print(f"⚠️ Could not save the LLM gateway: {e}")
-    return {"localLlm": llm_backend.describe()}
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(f"{url}/api/tags")
+            r.raise_for_status()
+            names = [m.get("name") for m in (r.json().get("models") or []) if m.get("name")]
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not reach Ollama at {url}: {str(e)[:200]}")
+    return {"models": sorted(names)}
 
 
 def _local_job_running(job_id: str) -> bool:

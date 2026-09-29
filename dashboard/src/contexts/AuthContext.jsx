@@ -139,7 +139,9 @@ export function AuthProvider({ children }) {
   const value = {
     billingEnabled: config.billingEnabled,
     localLlm: config.localLlm || null,
-    setLocalLlm: (llm) => setConfig((c) => ({ ...c, localLlm: llm })),
+    llmSettings: config.llmSettings || null,
+    // Server answer of a model-settings save: { localLlm, llmSettings }.
+    setLlm: ({ localLlm, llmSettings }) => setConfig((c) => ({ ...c, localLlm, llmSettings })),
     googleAuthEnabled: config.googleAuthEnabled,
     jobRetentionSeconds: config.jobRetentionSeconds || null,
     loading,

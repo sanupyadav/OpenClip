@@ -50,3 +50,35 @@ def test_cancel_queued_job_marks_it_stopped(monkeypatch):
             asyncio.run(app.cancel_local_job("t-q"))  # already finished
     finally:
         app.jobs.pop("t-q", None)
+
+
+def test_retry_requeues_a_failed_job_and_keeps_the_checkpoint(monkeypatch, tmp_path):
+    monkeypatch.setattr(app, "BILLING_ENABLED", False)
+    queued = []
+    monkeypatch.setattr(app, "_enqueue_job", lambda jid, prio=2: queued.append(jid))
+    (tmp_path / "x_clip_1.mp4").write_bytes(b"half")
+    (tmp_path / ".transcript_checkpoint.json").write_text("{}")
+    app.jobs["t-f"] = {"status": "failed", "logs": _log(), "cancelled": True,
+                       "cmd": ["py", "-u", "main.py", "-u", "https://x"], "output_dir": str(tmp_path)}
+    try:
+        rows = asyncio.run(app.local_queue())["jobs"]
+        assert any(r["job_id"] == "t-f" and r["status"] == "failed" for r in rows)
+        asyncio.run(app.retry_local_job("t-f"))
+        job = app.jobs["t-f"]
+        assert job["status"] == "queued" and "cancelled" not in job and queued == ["t-f"]
+        assert not (tmp_path / "x_clip_1.mp4").exists()
+        assert (tmp_path / ".transcript_checkpoint.json").exists()
+        with pytest.raises(app.HTTPException):
+            asyncio.run(app.retry_local_job("t-f"))  # queued now, not failed
+    finally:
+        app.jobs.pop("t-f", None)
+
+
+def test_retry_refuses_a_job_it_cannot_rerun(monkeypatch):
+    monkeypatch.setattr(app, "BILLING_ENABLED", False)
+    app.jobs["t-nocmd"] = {"status": "failed", "logs": _log()}  # recovered from disk
+    try:
+        with pytest.raises(app.HTTPException):
+            asyncio.run(app.retry_local_job("t-nocmd"))
+    finally:
+        app.jobs.pop("t-nocmd", None)

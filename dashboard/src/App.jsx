@@ -1998,6 +1998,24 @@ function App() {
                         <Square size={11} /> Stop
                       </button>
                     )}
+                    {status === 'error' && !billingEnabled && jobId && (
+                      <button
+                        onClick={async () => {
+                          try {
+                            await apiJson(`/api/local/queue/${encodeURIComponent(jobId)}/retry`, { method: 'POST' });
+                            setJobError('');
+                            setLogs((prev) => [...prev, '🔁 Retrying…']);
+                            setStatus('processing'); // restarts the status poll
+                          } catch (e) {
+                            alert(e.message || 'Could not retry the job');
+                          }
+                        }}
+                        className="btn-quiet px-2.5 py-1 text-xs text-brass"
+                        title="Run this job again"
+                      >
+                        <RotateCcw size={11} /> Retry
+                      </button>
+                    )}
                     <span className={status === 'processing' ? 'badge-brass' :
                       status === 'complete' ? 'badge-ok' :
                         'badge-danger'

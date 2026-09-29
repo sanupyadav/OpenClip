@@ -2656,15 +2656,41 @@ async def cancel_local_job(job_id: str):
     return {"cancelled": job_id}
 
 
+@app.post("/api/local/queue/{job_id}/retry")
+async def retry_local_job(job_id: str):
+    """Self-host Queue tab / Clip Generator "Retry": re-queue a failed (or
+    stopped) clip job with the same command. Same cleanup as the auto-retry:
+    half-made clips go, the source and transcript checkpoint stay."""
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Not Found")
+    job = jobs.get(job_id)
+    if not job or job.get("status") != "failed" or not job.get("cmd"):
+        raise HTTPException(status_code=404, detail="No failed job with that id")
+    if job.get("_proc") is not None:
+        raise HTTPException(status_code=409, detail="The job is still stopping, try again in a moment")
+    # ponytail: no resume manifest, so a server restart drops a manual retry; submit again then.
+    job.pop("cancelled", None)
+    job["status"] = "queued"
+    job["result"] = None
+    job["ready_files"] = {}
+    job["logs"].append("🔁 Retrying (you asked).")
+    _clean_for_retry(job.get("output_dir") or os.path.join(OUTPUT_DIR, job_id))
+    _enqueue_job(job_id, 1)
+    return {"retried": job_id}
+
+
 @app.get("/api/local/queue")
 async def local_queue():
-    """Self-host Queue tab: every queued or running clip / UGC job on this server."""
+    """Self-host Queue tab: every queued or running clip / UGC job on this
+    server, plus failed clip jobs that can still be retried."""
     if BILLING_ENABLED:
         raise HTTPException(status_code=404, detail="Not Found")
     active = ("queued", "processing")
-    rows = [_queue_row(j, job, "clips") for j, job in list(jobs.items()) if job.get("status") in active]
+    rows = [_queue_row(j, job, "clips") for j, job in list(jobs.items())
+            if job.get("status") in active or (job.get("status") == "failed" and job.get("cmd"))]
     rows += [_queue_row(j, job, "ugc") for j, job in list(saas_jobs.items()) if job.get("status") in active]
-    rows.sort(key=lambda r: (r["status"] != "processing", (r["queue"] or {}).get("position", 0), r["started"] or 0))
+    order = {"processing": 0, "queued": 1, "failed": 2}
+    rows.sort(key=lambda r: (order.get(r["status"], 3), (r["queue"] or {}).get("position", 0), r["started"] or 0))
     return {"jobs": rows, "max_concurrent": MAX_CONCURRENT_JOBS}
 
 

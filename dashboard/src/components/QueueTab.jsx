@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Activity, Loader2, Clock, ExternalLink, Square } from 'lucide-react';
+import { Activity, Loader2, Clock, ExternalLink, Square, RotateCcw, AlertTriangle } from 'lucide-react';
 import { apiJson } from '../lib/api';
 
 const since = (t) => {
@@ -8,7 +8,8 @@ const since = (t) => {
   return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
 };
 
-// Self-host: every queued / running clip and UGC job on this server, polled.
+// Self-host: every queued / running clip and UGC job on this server, plus
+// failed clip jobs that can be retried, polled.
 export default function QueueTab({ onOpenJob }) {
   const [data, setData] = useState(null);
   const [, tick] = useState(0);
@@ -40,8 +41,21 @@ export default function QueueTab({ onOpenJob }) {
     }
   };
 
+  const retry = async (j) => {
+    setStopping(j.job_id);
+    try {
+      await apiJson(`/api/local/queue/${encodeURIComponent(j.job_id)}/retry`, { method: 'POST' });
+      setData((d) => d && { ...d, jobs: d.jobs.map((x) => (x.job_id === j.job_id ? { ...x, status: 'queued' } : x)) });
+    } catch (e) {
+      alert(e.message || 'Could not retry the job');
+    } finally {
+      setStopping('');
+    }
+  };
+
   const jobs = data?.jobs || [];
   const running = jobs.filter((j) => j.status === 'processing').length;
+  const failed = jobs.filter((j) => j.status === 'failed').length;
 
   return (
     <div className="space-y-6">
@@ -49,7 +63,7 @@ export default function QueueTab({ onOpenJob }) {
         <p className="eyebrow mb-1">07 · QUEUE</p>
         <h2 className="font-display lowercase text-2xl md:text-3xl text-ink">queue</h2>
         <p className="readout mt-2">
-          {data ? `${running} running · ${jobs.length - running} waiting · ${data.max_concurrent} at a time` : '…'}
+          {data ? `${running} running · ${jobs.length - running - failed} waiting${failed ? ` · ${failed} failed` : ''} · ${data.max_concurrent} at a time` : '…'}
         </p>
       </div>
 
@@ -68,6 +82,8 @@ export default function QueueTab({ onOpenJob }) {
                 <div className="flex items-center gap-2 mb-1 flex-wrap">
                   {j.status === 'processing' ? (
                     <span className="badge-ok"><Loader2 size={11} className="animate-spin" /> Running</span>
+                  ) : j.status === 'failed' ? (
+                    <span className="badge-danger"><AlertTriangle size={11} /> Failed</span>
                   ) : (
                     <span className="badge-warn"><Clock size={11} /> Queued{j.queue ? ` · #${j.queue.position}` : ''}</span>
                   )}
@@ -85,10 +101,17 @@ export default function QueueTab({ onOpenJob }) {
                   <button onClick={() => onOpenJob(j.job_id)} className="btn-quiet px-3 py-1.5 text-xs">
                     <ExternalLink size={12} /> Open
                   </button>
-                  <button onClick={() => stop(j)} disabled={stopping === j.job_id} className="btn-quiet px-3 py-1.5 text-xs text-warn">
-                    {stopping === j.job_id ? <Loader2 size={12} className="animate-spin" /> : <Square size={12} />}
-                    {j.status === 'processing' ? 'Stop' : 'Remove'}
-                  </button>
+                  {j.status === 'failed' ? (
+                    <button onClick={() => retry(j)} disabled={stopping === j.job_id} className="btn-quiet px-3 py-1.5 text-xs text-brass">
+                      {stopping === j.job_id ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />}
+                      Retry
+                    </button>
+                  ) : (
+                    <button onClick={() => stop(j)} disabled={stopping === j.job_id} className="btn-quiet px-3 py-1.5 text-xs text-warn">
+                      {stopping === j.job_id ? <Loader2 size={12} className="animate-spin" /> : <Square size={12} />}
+                      {j.status === 'processing' ? 'Stop' : 'Remove'}
+                    </button>
+                  )}
                 </div>
               )}
             </div>

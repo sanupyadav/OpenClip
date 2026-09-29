@@ -49,3 +49,6 @@ skills-lock.json
 
 # Instrucciones locales con datos de infra (repo público)
 CLAUDE.local.md
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/

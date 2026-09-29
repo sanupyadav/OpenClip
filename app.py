@@ -833,6 +833,7 @@ def _recover_jobs_from_disk():
                     clip['video_url'] = (
                         f"/videos/{job_id}/"
                         f"{_canonical_clip_file(job_path, base_name, i)}")
+            clips = [c for c in clips if not c.get('deleted')]  # Queue tab / My videos delete
             owner = None
             owner_path = os.path.join(job_path, ".owner")
             if os.path.exists(owner_path):
@@ -2536,6 +2537,148 @@ async def get_config():
         # because the moment picker runs on an OpenAI-compatible server.
         "localLlm": None if BILLING_ENABLED else llm_backend.describe(),
     }
+
+
+class _LlmPing(BaseModel):
+    ok: bool
+
+
+@app.post("/api/llm/test")
+async def test_local_llm():
+    """Self-host Settings "Test": one tiny JSON call through the same path the
+    moment picker uses, so a pass here means the pipeline can reach the model."""
+    if BILLING_ENABLED or not llm_backend.active():
+        raise HTTPException(status_code=404, detail="No local LLM configured")
+    started = time.time()
+    try:
+        await asyncio.to_thread(
+            llm_backend.generate_json, 'Reply with the JSON {"ok": true}', _LlmPing)
+        return {"ok": True, "model": llm_backend.model_name(),
+                "seconds": round(time.time() - started, 1)}
+    except Exception as e:
+        return {"ok": False, "model": llm_backend.model_name(),
+                "seconds": round(time.time() - started, 1), "error": str(e)[:300]}
+
+
+def _local_job_running(job_id: str) -> bool:
+    job = jobs.get(job_id) or saas_jobs.get(job_id.removeprefix("saas_")) or {}
+    return (job.get("status") in ("queued", "processing")
+            or os.path.isfile(os.path.join(OUTPUT_DIR, job_id, _RESUME_FILE)))
+
+
+@app.get("/api/local/videos")
+async def list_local_videos():
+    """Self-host: every finished clip job and UGC video in OUTPUT_DIR, newest
+    first. The cloud equivalent is /api/history (database + R2)."""
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Not Found")
+    out = []
+    for name in os.listdir(OUTPUT_DIR):
+        path = os.path.join(OUTPUT_DIR, name)
+        if not os.path.isdir(path) or name == "thumbnails" or _local_job_running(name):
+            continue
+        videos = []
+        source = ""
+        meta = glob.glob(os.path.join(path, "*_metadata.json"))
+        if meta:
+            try:
+                with open(meta[0]) as f:
+                    data = json.load(f)
+            except (OSError, ValueError):
+                data = {}
+            clips = data.get("shorts", [])
+            base = os.path.basename(meta[0]).replace("_metadata.json", "")
+            source = os.path.splitext(data.get("source_video") or base)[0].replace("_", " ")
+            for i, c in enumerate(clips):
+                if c.get("deleted"):
+                    continue
+                url = c.get("video_url") or f"/videos/{name}/{_canonical_clip_file(path, base, i)}"
+                videos.append({"url": url, "index": i, "start": c.get("start"), "end": c.get("end"),
+                               "title": c.get("video_title_for_youtube_short") or c.get("title") or f"Clip {i + 1}"})
+            # Numbered in the order the moments happen in the source video.
+            videos.sort(key=lambda v: v["start"] if v["start"] is not None else 0)
+        videos += [{"url": f"/videos/{name}/{os.path.basename(v)}", "title": "UGC video"}
+                   for v in glob.glob(os.path.join(path, "*_final.mp4")) if os.path.getsize(v) > 0]
+        if videos:
+            out.append({"job_id": name, "kind": "ugc" if name.startswith("saas_") else "clips",
+                        "source": source, "created": os.path.getmtime(path), "videos": videos})
+    out.sort(key=lambda j: j["created"], reverse=True)
+    return {"jobs": out}
+
+
+def _queue_row(job_id, job, kind):
+    cmd = job.get("cmd") or []
+    # cmd is [python, -u, main.py, -u|-i, source, ...]: skip the interpreter's own -u.
+    args = cmd[cmd.index("main.py") + 1:] if "main.py" in cmd else cmd
+    source = next((args[i + 1] for i, a in enumerate(args[:-1]) if a in ("-u", "-i")), "")
+    logs = job.get("logs") or []
+    times = getattr(logs, "times", None) or []
+    step = next((l for l in reversed(logs)
+                 if l.strip() and not l.startswith(("[debug]", "[download]", "[youtube]", "[info]"))), "")
+    return {"job_id": job_id, "kind": kind, "status": job.get("status"),
+            "source": os.path.basename(source) if kind == "clips" and not source.startswith("http") else source,
+            "step": step[:200], "started": times[0] if times else None,
+            "queue": queue_snapshot(job_id) if kind == "clips" else None}
+
+
+@app.get("/api/local/queue")
+async def local_queue():
+    """Self-host Queue tab: every queued or running clip / UGC job on this server."""
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Not Found")
+    active = ("queued", "processing")
+    rows = [_queue_row(j, job, "clips") for j, job in list(jobs.items()) if job.get("status") in active]
+    rows += [_queue_row(j, job, "ugc") for j, job in list(saas_jobs.items()) if job.get("status") in active]
+    rows.sort(key=lambda r: (r["status"] != "processing", (r["queue"] or {}).get("position", 0), r["started"] or 0))
+    return {"jobs": rows, "max_concurrent": MAX_CONCURRENT_JOBS}
+
+
+@app.delete("/api/local/videos/{job_id}/clips/{index}")
+async def delete_local_clip(job_id: str, index: int):
+    """Self-host: remove one clip (every rendered variant of it). The metadata
+    entry stays, marked deleted, because file names are keyed by position."""
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Not Found")
+    path = _safe_under(OUTPUT_DIR, job_id)
+    if not path or os.path.dirname(path) != os.path.realpath(OUTPUT_DIR) or not os.path.isdir(path):
+        raise HTTPException(status_code=404, detail="Job not found")
+    if _local_job_running(job_id):
+        raise HTTPException(status_code=409, detail="This job is still running")
+    meta = glob.glob(os.path.join(path, "*_metadata.json"))
+    if not meta:
+        raise HTTPException(status_code=404, detail="Clip not found")
+    with open(meta[0]) as f:
+        data = json.load(f)
+    clips = data.get("shorts", [])
+    if not 0 <= index < len(clips) or clips[index].get("deleted"):
+        raise HTTPException(status_code=404, detail="Clip not found")
+    base = os.path.basename(meta[0]).replace("_metadata.json", "")
+    # base_clip_N.mp4, hooked_*_base_clip_N.mp4, subtitled_*..., and the
+    # .layout.json sidecar; "_clip_1.mp4" never matches "_clip_11.mp4".
+    for f in glob.glob(os.path.join(path, f"*{glob.escape(base)}_clip_{index + 1}.mp4*")):
+        os.remove(f)
+    clips[index]["deleted"] = True
+    with open(meta[0], "w") as f:
+        json.dump(data, f)
+    jobs.pop(job_id, None)  # rebuilt from disk without the clip on next restart
+    return {"deleted": index}
+
+
+@app.delete("/api/local/videos/{job_id}")
+async def delete_local_videos(job_id: str):
+    """Self-host: remove one job's folder (all its clips and the source)."""
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Not Found")
+    path = _safe_under(OUTPUT_DIR, job_id)
+    if not path or os.path.dirname(path) != os.path.realpath(OUTPUT_DIR) or job_id == "thumbnails" \
+            or not os.path.isdir(path):
+        raise HTTPException(status_code=404, detail="Job not found")
+    if _local_job_running(job_id):
+        raise HTTPException(status_code=409, detail="This job is still running")
+    shutil.rmtree(path, ignore_errors=True)
+    jobs.pop(job_id, None)
+    saas_jobs.pop(job_id.removeprefix("saas_"), None)
+    return {"deleted": job_id}
 
 async def _probe_youtube_quality(url: str) -> dict:
     """Run quality_probe.py in a worker thread; {} on any failure (fail-open)."""

@@ -3,9 +3,11 @@ import { Film, Download, Copy, Check, Loader2, Play, User } from 'lucide-react';
 import { getApiUrl } from '../config';
 import SegmentedControl from './ui/SegmentedControl';
 import Modal from './ui/Modal';
+import LocalVideos from './LocalVideos';
 
-export default function UGCGallery() {
-  const [tab, setTab] = useState('videos');
+export default function UGCGallery({ local = false }) {
+  const [tab, setTab] = useState(local ? 'mine' : 'videos');
+  const [mineCount, setMineCount] = useState(null);
   const [videos, setVideos] = useState([]);
   const [avatars, setAvatars] = useState([]);
   const [loadingVideos, setLoadingVideos] = useState(true);
@@ -55,19 +57,22 @@ export default function UGCGallery() {
         </p>
       </div>
 
-      <div className="max-w-xs w-full">
+      <div className="max-w-md w-full">
         <SegmentedControl
           size="sm"
           value={tab}
           onChange={setTab}
           options={[
+            ...(local ? [{ value: 'mine', label: `My videos (${mineCount ?? '…'})`, icon: <Film size={14} /> }] : []),
             { value: 'videos', label: `Videos (${loadingVideos ? '…' : videos.length})`, icon: <Film size={14} /> },
             { value: 'avatars', label: `Avatars (${avatarsLoaded ? avatars.length : '…'})`, icon: <User size={14} /> },
           ]}
         />
       </div>
 
-      {loading ? (
+      {tab === 'mine' ? (
+        <LocalVideos onCount={setMineCount} />
+      ) : loading ? (
         <div className="flex items-center justify-center h-64">
           <Loader2 size={24} className="animate-spin text-brass" />
           <span className="ml-2 text-muted lowercase">Loading gallery...</span>

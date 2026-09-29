@@ -413,6 +413,20 @@ def _parse_json_response_text(text: str) -> dict:
             return json.loads(parse_candidate)
         except json.JSONDecodeError as e:
             last_error = e
+    # OpenAI-compatible models wrap the object in prose ("Rank: {w2} ...") or
+    # trail text after it, so first-{-to-last-} spans non-JSON. Take the first
+    # position that decodes to a complete object.
+    decoder = json.JSONDecoder()
+    cleaned = text.replace("\x00", "")
+    pos = cleaned.find("{")
+    while pos != -1:
+        try:
+            obj = decoder.raw_decode(cleaned, pos)[0]
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            pass
+        pos = cleaned.find("{", pos + 1)
     raise ValueError(f"Failed to parse Gemini JSON response: {last_error}")
 
 

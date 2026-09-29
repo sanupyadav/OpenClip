@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Menu, Lock, Rocket } from 'lucide-react';
 import KeyInput from './components/KeyInput';
+import LocalLlmCard from './components/LocalLlmCard';
+import QueueTab from './components/QueueTab';
+import ElapsedTimer from './components/ElapsedTimer';
+import { jobProgress } from './lib/jobProgress';
 import MediaInput from './components/MediaInput';
 import McpConnectCard from './components/McpConnectCard';
 import ResultCard from './components/ResultCard';
@@ -14,7 +18,6 @@ import ClipEditor from './components/ClipEditor';
 import ReframeEditor from './components/ReframeEditor';
 import UsageMeter from './components/UsageMeter';
 import TopUpModal from './components/TopUpModal';
-import StarBanner from './components/StarBanner';
 import PlanChoiceModal from './components/PlanChoiceModal';
 import ClipTutorial from './components/ClipTutorial';
 import OnboardingSurvey from './components/OnboardingSurvey';
@@ -261,7 +264,7 @@ const SESSION_MAX_AGE = 86400000; // 24 hours
 // Mock polling function
 const pollJob = async (jobId) => {
   const res = await apiFetch(`/api/status/${jobId}`);
-  if (!res.ok) throw new Error('Status check failed');
+  if (!res.ok) throw Object.assign(new Error('Status check failed'), { status: res.status });
   return res.json();
 };
 
@@ -506,6 +509,18 @@ function App() {
 
   // Reopen an archived project from the History tab: the backend re-downloads
   // its files from R2 into the server's working dir and returns the full state.
+  // Queue tab "Open": follow a job that is already running on the server.
+  const openRunningJob = (runningJobId) => {
+    flushClipState();
+    setJobId(runningJobId);
+    setResults(null);
+    setLogs(['Following a running job…']);
+    setLogTimes([Date.now() / 1000]);
+    setProcessingMedia(null);
+    setStatus('processing');
+    setActiveTab('dashboard');
+  };
+
   const restoreProject = async (projectJobId) => {
     const data = await apiJson(`/api/projects/${projectJobId}/restore`, { method: 'POST' });
     flushClipState();
@@ -764,6 +779,15 @@ function App() {
           }
         } catch (e) {
           console.error("Polling error", e);
+          // The job is gone server-side (stopped, deleted or expired): stop
+          // polling instead of showing "processing" forever.
+          if (e.status === 404) {
+            clearInterval(interval);
+            setQueueInfo(null);
+            setStatus('error');
+            setJobError('This job no longer exists on the server (it was stopped or deleted).');
+            try { localStorage.removeItem(SESSION_KEY); } catch (_) { /* ignore */ }
+          }
         }
       }, 2000);
     }
@@ -800,8 +824,9 @@ function App() {
   // `keysMissing` now means "self-host BYOK keys missing" — it never fires on hosted.
   // A self-hosted server running the moment picker on a local LLM
   // (LLM_BASE_URL) does not need a Gemini key for the core pipeline.
+  // Upload-Post is only needed to publish; the post buttons check it themselves.
   const geminiOk = !!apiKey || !!localLlm;
-  const keysMissing = !billingEnabled && (!geminiOk || !uploadPostKey);
+  const keysMissing = !billingEnabled && !geminiOk;
   const needsPlan = billingEnabled && !isManaged;   // hosted, signed-out or no active plan/trial
 
   // Fresh sign-up: Clip Generator tutorial (AuthContext set os_show_clip_tutorial
@@ -866,7 +891,7 @@ function App() {
   // dropped so a reload does not keep forcing the tab.
   const [autopilotConnected, setAutopilotConnected] = useState(false);
   useEffect(() => {
-    const DEEP_LINK_TABS = ['autopilot', 'history', 'settings', 'thumbnails', 'dashboard'];
+    const DEEP_LINK_TABS = ['autopilot', 'history', 'queue', 'settings', 'thumbnails', 'dashboard'];
     const apply = () => {
       const hash = window.location.hash || '';
       if (!hash.startsWith('#app?')) return;
@@ -1150,6 +1175,7 @@ function App() {
     { id: 'ugc-gallery', ord: '05', icon: LayoutGrid, label: 'UGC Gallery', short: 'gallery', primary: true },
     { id: 'thumbnails', ord: '06', icon: Image, label: 'YouTube Studio', short: 'studio', primary: true },
     ...(billingEnabled && isSignedIn ? [{ id: 'history', ord: '07', icon: History, label: 'History', short: 'history' }] : []),
+    ...(!billingEnabled ? [{ id: 'queue', ord: '07', icon: Activity, label: 'Queue', short: 'queue' }] : []),
     { id: 'settings', ord: '08', icon: Settings, label: 'Settings', short: 'settings' },
   ];
   const activeNav = navItems.find((n) => n.id === activeTab);
@@ -1170,26 +1196,10 @@ function App() {
   };
   const tabLocked = (id) => tutorialLock && id !== 'dashboard';
 
-  // Shared footer links (landing, repo, pricing, contact) — same list in the
+  // Shared footer links (pricing) — same list in the
   // desktop rail and the mobile drawer, so they can never drift apart.
   const NavFooterLinks = ({ collapsed = false }) => (
     <>
-      <a
-        href="#landing"
-        className="flex items-center gap-2 px-3 py-2 text-xs lowercase text-muted hover:text-ink2 transition-colors"
-      >
-        <Globe size={14} className="shrink-0" />
-        <span className={collapsed ? 'hidden lg:block truncate' : 'truncate'}>landing page</span>
-      </a>
-      <a
-        href="https://github.com/mutonby/openshorts"
-        target="_blank"
-        rel="noopener noreferrer"
-        className="flex items-center gap-2 px-3 py-2 text-xs lowercase text-muted hover:text-ink2 transition-colors"
-      >
-        <svg height="14" viewBox="0 0 16 16" version="1.1" width="14" aria-hidden="true" fill="currentColor" className="shrink-0"><path fillRule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
-        <span className={collapsed ? 'hidden lg:block truncate' : 'truncate'}>open source</span>
-      </a>
       {billingEnabled && (
         <a
           href="#/pricing"
@@ -1199,13 +1209,6 @@ function App() {
           <span className={collapsed ? 'hidden lg:block truncate' : 'truncate'}>plans &amp; pricing</span>
         </a>
       )}
-      <a
-        href="mailto:info@openshorts.app"
-        className="flex items-center gap-2 px-3 py-2 text-xs lowercase text-muted hover:text-ink2 transition-colors"
-      >
-        <Mail size={14} className="shrink-0" />
-        <span className={collapsed ? 'hidden lg:block truncate' : 'truncate'}>info@openshorts.app</span>
-      </a>
     </>
   );
 
@@ -1217,7 +1220,7 @@ function App() {
         <div className="w-8 h-8 bg-paper3 rounded-input flex items-center justify-center shrink-0 overflow-hidden border border-rule">
           <img src="/logo-openshorts.png" alt="Logo" className="w-full h-full object-cover" />
         </div>
-        <span className="font-display lowercase text-lg text-ink hidden lg:block">openshorts</span>
+        <span className="font-display lowercase text-lg text-ink hidden lg:block">openClip</span>
       </a>
 
       <nav className="flex-1 px-4 py-4 space-y-1">
@@ -1240,17 +1243,17 @@ function App() {
               <span className="text-sm lowercase hidden lg:block flex-1 text-left truncate">{item.label}</span>
               {tabLocked(item.id)
                 ? <Lock size={12} className="shrink-0 hidden lg:block" />
-                : item.byok ? <span className="readout hidden lg:block">BYOK</span>
-                  : item.isNew ? <span className="badge-brass hidden lg:block">new</span> : null}
-              <span className="readout hidden lg:block">{item.ord}</span>
+                : item.isNew ? <span className="badge-brass hidden lg:block">new</span> : null}
             </button>
           );
         })}
       </nav>
 
-      <div className="p-4 border-t border-rule space-y-1">
-        <NavFooterLinks collapsed />
-      </div>
+      {billingEnabled && (
+        <div className="p-4 border-t border-rule space-y-1">
+          <NavFooterLinks collapsed />
+        </div>
+      )}
     </div>
   );
 
@@ -1273,7 +1276,7 @@ function App() {
             <div className="w-7 h-7 bg-paper3 rounded-input overflow-hidden border border-rule shrink-0">
               <img src="/logo-openshorts.png" alt="" className="w-full h-full object-cover" />
             </div>
-            <span className="font-display lowercase text-lg text-ink">openshorts</span>
+            <span className="font-display lowercase text-lg text-ink">openClip</span>
           </a>
           <button
             onClick={() => setNavOpen(false)}
@@ -1304,16 +1307,17 @@ function App() {
                 <span className="text-[0.95rem] lowercase flex-1 text-left truncate">{item.label}</span>
                 {tabLocked(item.id)
                   ? <Lock size={12} className="shrink-0" />
-                  : item.byok ? <span className="readout shrink-0">BYOK</span>
-                    : item.isNew ? <span className="badge-brass shrink-0">new</span> : null}
+                  : item.isNew ? <span className="badge-brass shrink-0">new</span> : null}
               </button>
             );
           })}
         </nav>
 
-        <div className="px-3 py-3 border-t border-rule space-y-0.5 safe-bottom shrink-0">
-          <NavFooterLinks />
-        </div>
+        {billingEnabled && (
+          <div className="px-3 py-3 border-t border-rule space-y-0.5 safe-bottom shrink-0">
+            <NavFooterLinks />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1381,7 +1385,7 @@ function App() {
               <Menu size={20} />
             </button>
             <span data-tutorial="nav-clips" className="md:hidden font-display lowercase text-base text-ink truncate">
-              {activeNav?.label || 'openshorts'}
+              {activeNav?.label || 'openClip'}
             </span>
             {status !== 'idle' && (
               <button
@@ -1438,11 +1442,7 @@ function App() {
               >
                 <AlertTriangle size={12} />
                 <span className="hidden md:inline">
-                  {!geminiOk && !uploadPostKey
-                    ? 'Gemini & Upload-Post keys missing'
-                    : !geminiOk
-                      ? 'Gemini API Key Missing'
-                      : 'Upload-Post API Key Missing'}
+                  Gemini API Key Missing
                 </span>
                 <span className="md:hidden">keys missing</span>
               </button>
@@ -1458,11 +1458,7 @@ function App() {
               <div className="min-w-0">
                 <span className="font-medium text-ink">Required API keys missing.</span>{' '}
                 <span className="text-muted">
-                  {!geminiOk && !uploadPostKey
-                    ? 'Set your Gemini and Upload-Post API keys to use OpenShorts.'
-                    : !geminiOk
-                      ? 'Set your Gemini API key to use OpenShorts.'
-                      : 'Set your Upload-Post API key to use OpenShorts.'}
+                  Set your Gemini API key to use openClip.
                 </span>
               </div>
             </div>
@@ -1562,6 +1558,7 @@ function App() {
                 </div>
               ) : (
                 <>
+              {localLlm && <LocalLlmCard llm={localLlm} />}
               <KeyInput onKeySet={setApiKey} savedKey={apiKey} />
 
               <div className="card p-4 sm:p-6 mt-8">
@@ -1861,7 +1858,7 @@ function App() {
           {activeTab === 'ugc-gallery' && (
             <div className="h-full overflow-y-auto custom-scrollbar animate-fade">
               <div className="max-w-6xl mx-auto p-4 sm:p-6 md:p-8">
-                <UGCGallery />
+                <UGCGallery local={!billingEnabled} />
               </div>
             </div>
           )}
@@ -1887,6 +1884,14 @@ function App() {
                     <button onClick={() => setShowLogin(true)} className="btn-primary">sign in</button>
                   </div>
                 )}
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'queue' && (
+            <div className="h-full overflow-y-auto custom-scrollbar animate-fade">
+              <div className="max-w-4xl mx-auto p-4 sm:p-6 md:p-8">
+                <QueueTab onOpenJob={openRunningJob} />
               </div>
             </div>
           )}
@@ -1975,12 +1980,15 @@ function App() {
                     <Activity className={`text-brass ${status === 'processing' ? 'animate-pulse' : ''}`} size={18} />
                     Live Analysis
                   </h2>
-                  <span className={status === 'processing' ? 'badge-brass' :
-                    status === 'complete' ? 'badge-ok' :
-                      'badge-danger'
-                    }>
-                    {status.toUpperCase()}
-                  </span>
+                  <div className="flex items-center gap-2.5">
+                    <ElapsedTimer times={logTimes} running={status === 'processing'} />
+                    <span className={status === 'processing' ? 'badge-brass' :
+                      status === 'complete' ? 'badge-ok' :
+                        'badge-danger'
+                      }>
+                      {status.toUpperCase()}
+                    </span>
+                  </div>
                 </div>
 
                 {/* Waiting in line: say where and for how long, and that paid
@@ -2021,19 +2029,27 @@ function App() {
                 {status === 'processing' && (
                   <div className="sm:hidden mb-3 flex items-start gap-2 text-xs text-ink2 min-w-0">
                     <Loader2 size={14} className="animate-spin text-brass shrink-0 mt-px" />
-                    <span className="min-w-0 leading-snug break-words">
+                    <span className="min-w-0 leading-snug [overflow-wrap:anywhere]">
                       {logs.length ? logs[logs.length - 1] : 'starting up…'}
                     </span>
                   </div>
                 )}
 
-                {/* The render is dead time: the user is watching a progress bar
-                    with nothing to do, so this is where the one star ask goes. */}
-                {status === 'processing' && (
-                  <div className="my-3">
-                    <StarBanner message="Got a minute while this renders?" />
-                  </div>
-                )}
+                {/* How far along the job is, read from its log markers. */}
+                {status === 'processing' && !queueInfo && (() => {
+                  const { pct, label } = jobProgress(logs);
+                  return (
+                    <div className="-mt-1 sm:-mt-2 mb-4" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label="Job progress">
+                      <div className="flex items-center justify-between text-xs text-muted mb-1.5">
+                        <span className="truncate">{label}</span>
+                        <span className="tabular-nums text-ink2 shrink-0 ml-2">{pct}%</span>
+                      </div>
+                      <div className="h-2 rounded-full bg-paper3 overflow-hidden">
+                        <div className="h-full bg-brass rounded-full transition-all duration-700" style={{ width: `${pct}%` }} />
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Logs Terminal */}
                 <div className={`bg-paper rounded-card border border-rule overflow-hidden flex flex-col transition-all duration-500 ${status === 'complete' ? `min-h-0 opacity-50 hover:opacity-100 ${logsVisible ? 'h-32' : 'h-auto'}` : `flex-1 ${logsVisible ? 'min-h-[160px] sm:min-h-[200px]' : 'min-h-0 flex-none'}`}`}>
@@ -2060,7 +2076,7 @@ function App() {
                           <span className="text-muted opacity-50 shrink-0 hidden sm:inline tabular-nums">
                             {logTimes[i] ? new Date(logTimes[i] * 1000).toLocaleTimeString() : ''}
                           </span>
-                          <span className="min-w-0 break-words">{log}</span>
+                          <span className="min-w-0 [overflow-wrap:anywhere]">{log}</span>
                         </div>
                       ))}
                       {status === 'processing' && (
@@ -2267,11 +2283,7 @@ function App() {
         isOpen={showKeyModal}
         onClose={() => setShowKeyModal(false)}
         eyebrow="SETUP"
-        title={!geminiOk && !uploadPostKey
-          ? 'Required API Keys Missing'
-          : !geminiOk
-            ? 'Gemini API Key Required'
-            : 'Upload-Post API Key Required'}
+        title="Gemini API Key Required"
         footer={
           <div className="flex gap-3">
             <button
@@ -2291,7 +2303,7 @@ function App() {
       >
         <div className="space-y-4">
           <p className="text-sm text-muted">
-            OpenShorts needs both a <strong className="text-ink2">Gemini</strong> API key and an <strong className="text-ink2">Upload-Post</strong> API key. Both have free tiers.
+            Clipping needs a <strong className="text-ink2">Gemini</strong> API key (free tier available). Publishing to socials asks for an Upload-Post key later, in Settings.
           </p>
 
           {/* Gemini block */}
@@ -2322,36 +2334,6 @@ function App() {
             )}
           </div>
 
-          {/* Upload-Post block */}
-          <div className={`rounded-input p-4 space-y-2 border ${!uploadPostKey ? 'border-rule2' : 'border-rule opacity-70'}`}>
-            <p className="text-xs font-medium text-ink flex items-center gap-2">
-              {uploadPostKey ? <Check size={12} className="text-ok" /> : <AlertTriangle size={12} className="text-warn" />}
-              Upload-Post API Key {uploadPostKey && <span className="text-ok">— set</span>}
-            </p>
-            {!uploadPostKey && (
-              <>
-                <p className="text-xs text-muted">
-                  Required to publish your clips to TikTok, Instagram Reels, and YouTube Shorts. Free tier available, no credit card needed.
-                </p>
-                <ol className="text-xs text-muted space-y-1 list-decimal list-inside">
-                  <li>Register at <a href="https://app.upload-post.com/login" target="_blank" rel="noopener noreferrer" className="text-brass underline">app.upload-post.com</a></li>
-                  <li>Connect your TikTok, Instagram, or YouTube accounts</li>
-                  <li>Go to <a href="https://app.upload-post.com/api-keys" target="_blank" rel="noopener noreferrer" className="text-brass underline">API Keys</a> and generate one</li>
-                  <li>Paste it below</li>
-                </ol>
-                <input
-                  type="text"
-                  placeholder="Paste your Upload-Post API key here..."
-                  className="input-field"
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && e.target.value.trim()) {
-                      setUploadPostKey(e.target.value.trim());
-                    }
-                  }}
-                />
-              </>
-            )}
-          </div>
         </div>
       </Modal>
 

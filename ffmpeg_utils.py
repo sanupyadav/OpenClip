@@ -203,7 +203,13 @@ def video_encode_args(tier=QUALITY):
         print(f"🎞️ [Encoder] video encoder: {'h264_nvenc' if use_nvenc else 'libx264'} "
               f"(FFMPEG_ENCODER={mode})")
 
-    return list((_NVENC_ARGS if use_nvenc else _X264_ARGS)[tier])
+    args = list((_NVENC_ARGS if use_nvenc else _X264_ARGS)[tier])
+    # CPU-only hosts: X264_PRESET (e.g. veryfast) trades file size for render
+    # time on every tier; the CRF, and so the visual quality target, stays.
+    preset = os.environ.get("X264_PRESET", "").strip()
+    if preset and not use_nvenc:
+        args[args.index("-preset") + 1] = preset
+    return args
 
 
 def blurred_backdrop(out_w, out_h, sigma):

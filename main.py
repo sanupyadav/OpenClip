@@ -911,7 +911,8 @@ def download_youtube_video(url, output_dir=".", on_audio=None):
 
     def _base_opts(extractor_args, proxy, cookies=True):
         return {
-            'quiet': False, 'verbose': True, 'no_warnings': False,
+            # YTDLP_VERBOSE=1 brings back yt-dlp's [debug] lines (they flood the job log).
+            'quiet': False, 'verbose': os.environ.get("YTDLP_VERBOSE") == "1", 'no_warnings': False,
             'cookiefile': cookies_path if (cookies and cookies_path) else None,
             'proxy': proxy, 'socket_timeout': 30, 'retries': 10, 'fragment_retries': 10,
             'nocheckcertificate': True, 'cachedir': False,

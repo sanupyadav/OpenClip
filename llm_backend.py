@@ -61,7 +61,8 @@ def describe() -> Optional[dict]:
     """What ``/api/config`` tells the dashboard, or ``None`` when inactive."""
     if not active():
         return None
-    return {"provider": "openai", "model": model_name(), "baseUrl": base_url()}
+    return {"provider": "openai", "model": model_name(), "baseUrl": base_url(),
+            "hasKey": bool((os.environ.get("LLM_API_KEY") or "").strip())}
 
 
 def _timeout() -> float:

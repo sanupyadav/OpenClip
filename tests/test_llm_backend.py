@@ -47,7 +47,8 @@ def test_inactive_without_a_base_url(monkeypatch):
 def test_base_url_alone_activates_and_describes(local):
     assert llm_backend.active() is True
     assert llm_backend.describe() == {
-        "provider": "openai", "model": "qwen2.5:14b", "baseUrl": "http://llm.test/v1"}
+        "provider": "openai", "model": "qwen2.5:14b", "baseUrl": "http://llm.test/v1",
+        "hasKey": False}
 
 
 def test_explicit_gemini_provider_wins_over_base_url(local, monkeypatch):

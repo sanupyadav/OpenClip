@@ -48,3 +48,18 @@ def test_prompt_language_and_switch(monkeypatch):
     assert not hinglish.wanted(_transcript())
     monkeypatch.setenv("HINGLISH", "1")
     assert hinglish.wanted(_transcript()) and not hinglish.wanted({"language": "en", "segments": []})
+
+
+def test_many_words_go_in_several_batches_and_all_come_back(monkeypatch):
+    monkeypatch.setattr(hinglish, "BATCH", 3)
+    t = {"language": "hi", "segments": [{"start": 0, "end": 1, "text": " ".join(["क", "ख", "ग", "घ", "च", "छ", "ज"]),
+                                         "words": []}]}
+    calls = []
+
+    def ask(prompt, schema):
+        import json
+        words = json.loads(prompt.split("WORDS (JSON): ")[1])
+        calls.append(len(words))
+        return {"words": [f"w{len(w)}" for w in words]}
+    out = hinglish.romanize_transcript(t, ask)["segments"][0]["text"]
+    assert sorted(calls) == [1, 3, 3] and out.split() == ["w1"] * 7

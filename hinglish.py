@@ -28,7 +28,8 @@ Examples: हैं -> hain, क्या -> kya, दोस्तों -> dosto
 ज़्यादा -> zyada, पैसे -> paise. English words written in Devanagari go back to their
 normal English spelling: माइनक्राफ्ट -> Minecraft, सब्सक्राइब -> subscribe, जॉब -> job.
 Keep punctuation, and write the danda । as a full stop.
-Return exactly {n} items, in the same order, one per input word.
+Return exactly {n} items, in the same order, one per input word, as a JSON object
+of this exact shape and nothing else: {{"words": ["aaj", "ka", "Minecraft"]}}
 
 WORDS (JSON): {words}
 """
@@ -132,10 +133,14 @@ def romanize_transcript(transcript: dict, ask: Optional[Callable] = None) -> dic
             if tok and DEVANAGARI.search(tok) and tok not in seen:
                 seen.add(tok)
                 tokens.append(tok)
+    # Batches in parallel: a hosted model answers one call in seconds to
+    # minutes regardless of its size, so an hour of speech does not queue up.
+    from concurrent.futures import ThreadPoolExecutor
+    batches = [tokens[i:i + BATCH] for i in range(0, len(tokens), BATCH)]
     mapping = {}
-    for start in range(0, len(tokens), BATCH):
-        batch = tokens[start:start + BATCH]
-        mapping.update(zip(batch, _romanize_batch(batch, ask)))
+    with ThreadPoolExecutor(max_workers=min(4, len(batches) or 1)) as pool:
+        for batch, words in zip(batches, pool.map(lambda b: _romanize_batch(b, ask), batches)):
+            mapping.update(zip(batch, words))
 
     def convert(tok: str) -> str:
         if not DEVANAGARI.search(tok):

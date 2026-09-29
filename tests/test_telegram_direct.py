@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 
 import httpx
 import pytest
@@ -60,6 +61,16 @@ def test_recent_chats_lists_each_chat_once(monkeypatch):
 app = pytest.importorskip("app")
 
 
+def _send(**kw):
+    """POST a send and wait for its background task, like the tab that polls."""
+    async def go():
+        first = await app.telegram_send(app.TelegramSendRequest(**kw), None)
+        assert first["status"] == "sending"
+        await asyncio.gather(*list(app._tg_tasks))
+        return app.tg_marks_at(os.path.join(app._post_job_dir(kw["job_id"]), app._TG_MARKS))[str(kw["clip_index"])]
+    return asyncio.run(go())
+
+
 def test_config_is_write_only_and_a_send_is_marked_in_the_gallery(monkeypatch, tmp_path):
     monkeypatch.setattr(app, "BILLING_ENABLED", False)
     monkeypatch.setattr(app, "OUTPUT_DIR", str(tmp_path))
@@ -78,7 +89,7 @@ def test_config_is_write_only_and_a_send_is_marked_in_the_gallery(monkeypatch, t
     (job / "clip_0.mp4").write_bytes(b"v")
     (job / "s_metadata.json").write_text(json.dumps({"shorts": [{"video_url": "/videos/jobT/clip_0.mp4"}]}))
     monkeypatch.setattr(app._tg, "send_video", lambda *a: {"messageId": 9, "url": "https://t.me/mychan/9"})
-    out = asyncio.run(app.telegram_send(app.TelegramSendRequest(job_id="jobT", clip_index=0, title="T"), None))
+    out = _send(job_id="jobT", clip_index=0, title="T")
     assert out["url"] == "https://t.me/mychan/9" and out["chat"] == "My Channel"
     assert asyncio.run(app.telegram_sends("jobT"))["sends"]["0"]["messageId"] == 9
     assert asyncio.run(app.list_local_videos())["jobs"][0]["videos"][0]["telegram"]["messageId"] == 9
@@ -101,7 +112,7 @@ def test_unsend_deletes_the_message_and_the_mark(monkeypatch, tmp_path):
     job.mkdir()
     (job / "clip_0.mp4").write_bytes(b"v")
     monkeypatch.setattr(app._tg, "send_video", lambda *a: {"messageId": 7, "url": None})
-    mark = asyncio.run(app.telegram_send(app.TelegramSendRequest(job_id="jobD", clip_index=0, input_filename="clip_0.mp4"), None))
+    mark = _send(job_id="jobD", clip_index=0, input_filename="clip_0.mp4")
     assert mark["chatId"] == "@now"
     app._yt.save(app._TG_FILE, {"token": "T", "chat_id": "@changed"})  # the saved chat, not today's, is used
     calls = []
@@ -111,7 +122,7 @@ def test_unsend_deletes_the_message_and_the_mark(monkeypatch, tmp_path):
     with pytest.raises(app.HTTPException):
         asyncio.run(app.telegram_unsend("jobD", 0))  # nothing left to delete
     # Too old for Telegram: the error comes back, forget=true drops the mark alone.
-    asyncio.run(app.telegram_send(app.TelegramSendRequest(job_id="jobD", clip_index=0, input_filename="clip_0.mp4"), None))
+    _send(job_id="jobD", clip_index=0, input_filename="clip_0.mp4")
 
     def too_old(*a):
         raise app._tg.TelegramError("only within 48 hours")
@@ -150,3 +161,23 @@ def test_a_clip_over_the_limit_is_sent_as_a_compressed_copy(monkeypatch, tmp_pat
     assert out["compressedFromMb"] > out["sentMb"] and sizes[0] < 1024 * 1024
     assert clip.read_bytes() == before  # the original is untouched
     assert not list(tmp_path.glob("telegram_*"))
+
+
+def test_a_failed_background_send_is_marked_and_a_stale_one_expires(monkeypatch, tmp_path):
+    monkeypatch.setattr(app, "BILLING_ENABLED", False)
+    monkeypatch.setattr(app, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(app, "_TG_FILE", str(tmp_path / ".telegram.json"))
+    app._yt.save(app._TG_FILE, {"token": "T", "chat_id": "5"})
+    (tmp_path / "jobF").mkdir()
+    (tmp_path / "jobF" / "c.mp4").write_bytes(b"v")
+
+    def boom(*a):
+        raise tg.TelegramError("Too Many Requests")
+    monkeypatch.setattr(app._tg, "send_video", boom)
+    mark = _send(job_id="jobF", clip_index=0, input_filename="c.mp4")
+    assert mark["status"] == "failed" and "Too Many" in mark["error"]
+    # A failed one has nothing in the chat: deleting just drops the mark.
+    assert asyncio.run(app.telegram_unsend("jobF", 0))["deleted"] is False
+    # A "sending" left behind by a restart reads as failed after an hour.
+    app._tg_set_mark(str(tmp_path / "jobF"), 1, {"status": "sending", "at": 0})
+    assert asyncio.run(app.telegram_sends("jobF"))["sends"]["1"]["status"] == "failed"

@@ -2761,7 +2761,7 @@ async def list_local_videos():
                 data = {}
             clips = data.get("shorts", [])
             yt_marks = _yt.load(os.path.join(path, ".youtube_uploads.json"))
-            tg_marks = _yt.load(os.path.join(path, ".telegram_sends.json"))
+            tg_marks = tg_marks_at(os.path.join(path, ".telegram_sends.json"))
             base = os.path.basename(meta[0]).replace("_metadata.json", "")
             source = os.path.splitext(data.get("source_video") or base)[0].replace("_", " ")
             for i, c in enumerate(clips):
@@ -5860,10 +5860,55 @@ async def telegram_chats():
         raise HTTPException(status_code=400, detail=f"Telegram: {e}")
 
 
+# Sends run in the background (compressing a big clip takes a while), so a
+# mark is "sending" first and "sent" / "failed" after. One still "sending"
+# after this long was cut by a restart.
+_TG_STALE_SECONDS = 3600
+_tg_marks_lock = threading.Lock()
+_tg_tasks = set()  # keep a reference, or the event loop may drop a running send
+# Several clips can be sent at once ("send all"); two at a time keeps the
+# compression of big clips from eating the CPU/GPU the jobs need.
+_tg_slots = asyncio.Semaphore(int(os.environ.get("TELEGRAM_PARALLEL_SENDS", "2")))
+
+
+def tg_marks_at(path: str) -> dict:
+    marks = _yt.load(path)
+    now = time.time()
+    for m in marks.values():
+        if m.get("status") == "sending" and now - (m.get("at") or 0) > _TG_STALE_SECONDS:
+            m.update(status="failed", error="Interrupted (the server restarted). Send it again.")
+    return marks
+
+
+def _tg_set_mark(job_dir: str, clip_index: int, mark):
+    path = os.path.join(job_dir, _TG_MARKS)
+    with _tg_marks_lock:
+        marks = _yt.load(path)
+        if mark is None:
+            marks.pop(str(clip_index), None)
+        else:
+            marks[str(clip_index)] = mark
+        try:
+            _yt.save(path, marks)
+        except OSError as e:
+            print(f"⚠️ Could not record the Telegram send in {job_dir}: {e}")
+
+
+async def _tg_send_in_background(cfg, job_dir, clip_index, file_path, text, base):
+    try:
+        async with _tg_slots:
+            sent = await asyncio.to_thread(_tg.send_video, cfg["token"], cfg["chat_id"], file_path, text)
+        mark = {**base, **sent, "status": "sent", "at": time.time()}
+    except Exception as e:  # TelegramError, or anything unexpected: the mark must not stay "sending"
+        mark = {**base, "status": "failed", "error": str(e)[:300], "at": time.time()}
+        print(f"⚠️ Telegram send failed ({job_dir}, clip {clip_index}): {e}")
+    _tg_set_mark(job_dir, clip_index, mark)
+
+
 @app.get("/api/telegram/sends/{job_id}")
 async def telegram_sends(job_id: str):
     _yt_self_host()
-    return {"sends": _yt.load(os.path.join(_post_job_dir(job_id), _TG_MARKS))}
+    return {"sends": tg_marks_at(os.path.join(_post_job_dir(job_id), _TG_MARKS))}
 
 
 @app.delete("/api/telegram/sends/{job_id}/{clip_index}")
@@ -5872,11 +5917,14 @@ async def telegram_unsend(job_id: str, clip_index: int, forget: bool = False):
     the mark. forget=true only drops the mark, for a message the bot can no
     longer delete."""
     _yt_self_host()
-    marks_path = os.path.join(_post_job_dir(job_id), _TG_MARKS)
-    marks = _yt.load(marks_path)
-    mark = marks.get(str(clip_index))
+    job_dir = _post_job_dir(job_id)
+    mark = tg_marks_at(os.path.join(job_dir, _TG_MARKS)).get(str(clip_index))
     if not mark:
         raise HTTPException(status_code=404, detail="This clip was not sent to Telegram")
+    if mark.get("status") == "sending":
+        raise HTTPException(status_code=409, detail="It is still being sent; delete it once it arrives")
+    if mark.get("status") == "failed":
+        forget = True  # nothing arrived, so there is nothing to delete in the chat
     if not forget:
         cfg = _yt.load(_TG_FILE)
         chat_id = mark.get("chatId") or cfg.get("chat_id")  # older marks have no chatId
@@ -5886,8 +5934,7 @@ async def telegram_unsend(job_id: str, clip_index: int, forget: bool = False):
             await asyncio.to_thread(_tg.delete_message, cfg["token"], chat_id, mark["messageId"])
         except _tg.TelegramError as e:
             raise HTTPException(status_code=409, detail=f"Telegram: {e}")
-    marks.pop(str(clip_index), None)
-    _yt.save(marks_path, marks)
+    _tg_set_mark(job_dir, clip_index, None)
     return {"deleted": not forget, "forgotten": True}
 
 
@@ -5912,19 +5959,18 @@ async def telegram_send(req: TelegramSendRequest, request: Request):
     file_path = os.path.join(job_dir, name or "")
     if not name or not os.path.isfile(file_path):
         raise HTTPException(status_code=404, detail="Video file not found")
-    try:
-        sent = await asyncio.to_thread(_tg.send_video, cfg["token"], cfg["chat_id"], file_path,
-                                       _tg.caption(req.title, req.description))
-    except _tg.TelegramError as e:
-        raise HTTPException(status_code=400, detail=f"Telegram: {e}")
-    mark = {**sent, "chat": cfg.get("chat_title") or cfg["chat_id"], "chatId": cfg["chat_id"], "at": time.time()}
-    marks_path = os.path.join(job_dir, _TG_MARKS)
-    marks = _yt.load(marks_path)
-    marks[str(req.clip_index)] = mark
-    try:
-        _yt.save(marks_path, marks)
-    except OSError as e:
-        print(f"⚠️ Could not record the Telegram send for {req.job_id}: {e}")
+    current = tg_marks_at(os.path.join(job_dir, _TG_MARKS)).get(str(req.clip_index)) or {}
+    if current.get("status") == "sending":
+        raise HTTPException(status_code=409, detail="This clip is already being sent")
+    # Answer now and send in the background: compressing a clip over 50 MB
+    # takes a while, and the user may close the dialog or the tab meanwhile.
+    base = {"chat": cfg.get("chat_title") or cfg["chat_id"], "chatId": cfg["chat_id"]}
+    mark = {**base, "status": "sending", "at": time.time()}
+    _tg_set_mark(job_dir, req.clip_index, mark)
+    task = asyncio.create_task(_tg_send_in_background(
+        dict(cfg), job_dir, req.clip_index, file_path, _tg.caption(req.title, req.description), base))
+    _tg_tasks.add(task)
+    task.add_done_callback(_tg_tasks.discard)
     return mark
 
 

@@ -20,3 +20,18 @@ export async function unsendTelegram(jobId, index) {
         return false;
     }
 }
+
+
+// Queue a clip for the background send. Resolves to the "sending" mark.
+export function sendToTelegram({ jobId, index, inputFilename = null, title = '', description = '' }) {
+    return apiJson('/api/telegram/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: jobId, clip_index: index, input_filename: inputFilename, title, description }),
+    });
+}
+
+// The Telegram marks of one job, by clip index ({} when unavailable).
+export function fetchTelegramSends(jobId) {
+    return apiJson(`/api/telegram/sends/${encodeURIComponent(jobId)}`).then((d) => d.sends || {}).catch(() => ({}));
+}

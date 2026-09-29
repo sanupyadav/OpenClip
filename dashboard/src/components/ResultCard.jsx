@@ -11,7 +11,7 @@ import WatermarkModal, { watermarkNoticeDismissed } from './WatermarkModal';
 import TikTokDraftNotice from './TikTokDraftNotice';
 import YouTubeUploadModal, { YouTubeMark } from './YouTubeUploadModal';
 import TelegramSendModal, { TelegramMark } from './TelegramSendModal';
-import { unsendTelegram } from '../lib/telegram';
+import { unsendTelegram, fetchTelegramSends } from '../lib/telegram';
 import { useAuth } from '../contexts/AuthContext';
 import { renderInBrowser } from '../lib/renderInBrowser';
 
@@ -75,6 +75,12 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
         read(`/api/telegram/sends/${job}`, 'sends', setTgMark);
         return () => { alive = false; };
     }, [billingEnabled, jobId, index]);
+    // The server sends in the background: follow a "sending" mark until it lands.
+    useEffect(() => {
+        if (tgMark?.status !== 'sending' || !jobId) return;
+        const t = setInterval(() => fetchTelegramSends(jobId).then((m) => setTgMark(m[String(index)] || null)), 4000);
+        return () => clearInterval(t);
+    }, [tgMark?.status, jobId, index]);
     const videoRef = React.useRef(null);
     // Pristine base clip (no burned subtitles/hook), stable regardless of how
     // clip.video_url mutates after server edits. Used as the compositing base

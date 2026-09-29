@@ -4,7 +4,7 @@ import { apiJson } from '../lib/api';
 import { getApiUrl } from '../config';
 import YouTubeUploadModal, { YouTubeMark } from './YouTubeUploadModal';
 import TelegramSendModal, { TelegramMark } from './TelegramSendModal';
-import { unsendTelegram } from '../lib/telegram';
+import { unsendTelegram, sendToTelegram, fetchTelegramSends } from '../lib/telegram';
 
 const mmss = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
 
@@ -26,6 +26,41 @@ export default function LocalVideos({ onCount, onOpenSettings }) {
   useEffect(() => {
     if (jobs) onCount?.(jobs.reduce((n, j) => n + j.videos.length, 0));
   }, [jobs, onCount]);
+
+  const setTelegramMarks = (jobId, marks) => setJobs((js) => js && js.map((j) => (j.job_id !== jobId ? j : {
+    ...j, videos: j.videos.map((x) => (x.index == null ? x : { ...x, telegram: marks[String(x.index)] || null })),
+  })));
+
+  // Sends run on the server in the background: poll the jobs that have one on its way.
+  const sendingJobs = (jobs || [])
+    .filter((j) => j.videos.some((v) => v.telegram?.status === 'sending')).map((j) => j.job_id).join(',');
+  useEffect(() => {
+    if (!sendingJobs) return;
+    const t = setInterval(() => {
+      sendingJobs.split(',').forEach((id) => fetchTelegramSends(id).then((m) => setTelegramMarks(id, m)));
+    }, 4000);
+    return () => clearInterval(t);
+  }, [sendingJobs]);
+
+  // "Send all": every clip of the job that is not sent or on its way yet.
+  const sendAll = async (job) => {
+    const todo = job.videos.filter((v) => v.index != null && !['sent', 'sending'].includes(v.telegram?.status || (v.telegram ? 'sent' : '')));
+    if (!todo.length) { setError('Every clip of this video is already sent or on its way.'); return; }
+    if (!window.confirm(`Send ${todo.length} clip(s) to Telegram? They go in the background, two at a time.`)) return;
+    setError('');
+    for (const v of todo) {
+      try {
+        const mark = await sendToTelegram({ jobId: job.job_id, index: v.index, inputFilename: v.url.split('/').pop(),
+          title: v.title, description: v.description });
+        setJobs((js) => js.map((j) => (j.job_id !== job.job_id ? j : {
+          ...j, videos: j.videos.map((x) => (x.index === v.index ? { ...x, telegram: mark } : x)),
+        })));
+      } catch (e) {
+        setError(e.detail || e.message || 'Could not send');
+        if (e.status === 400) break;  // not set up: the rest would fail the same way
+      }
+    }
+  };
 
   const remove = async (job) => {
     if (!window.confirm(`Delete all ${job.videos.length} clip(s) of this job? This cannot be undone.`)) return;
@@ -121,6 +156,12 @@ export default function LocalVideos({ onCount, onOpenSettings }) {
               <span className="badge-ok mr-2">{job.kind === 'ugc' ? 'UGC' : 'Clips'}</span>
               {new Date(job.created * 1000).toLocaleString()} · {job.videos.length} clip(s)
             </p>
+            {job.kind === 'clips' && (
+              <button onClick={() => sendAll(job)} className="btn-quiet px-3 py-1.5 text-xs ml-auto"
+                title="Send every clip of this video to your Telegram chat">
+                <Send size={12} /> Send all to Telegram
+              </button>
+            )}
             <button
               onClick={() => remove(job)}
               disabled={deleting === job.job_id}

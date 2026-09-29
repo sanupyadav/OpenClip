@@ -65,7 +65,7 @@ def _send(**kw):
     """POST a send and wait for its background task, like the tab that polls."""
     async def go():
         first = await app.telegram_send(app.TelegramSendRequest(**kw), None)
-        assert first["status"] == "sending"
+        assert first["status"] == "queued"
         await asyncio.gather(*list(app._tg_tasks))
         return app.tg_marks_at(os.path.join(app._post_job_dir(kw["job_id"]), app._TG_MARKS))[str(kw["clip_index"])]
     return asyncio.run(go())
@@ -181,3 +181,38 @@ def test_a_failed_background_send_is_marked_and_a_stale_one_expires(monkeypatch,
     # A "sending" left behind by a restart reads as failed after an hour.
     app._tg_set_mark(str(tmp_path / "jobF"), 1, {"status": "sending", "at": 0})
     assert asyncio.run(app.telegram_sends("jobF"))["sends"]["1"]["status"] == "failed"
+
+
+def test_auto_send_queues_the_unsent_clips_of_a_finished_job(monkeypatch, tmp_path):
+    monkeypatch.setattr(app, "BILLING_ENABLED", False)
+    monkeypatch.setattr(app, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(app, "_TG_FILE", str(tmp_path / ".telegram.json"))
+    monkeypatch.setattr(app, "_local_job_running", lambda name: False)
+    job = tmp_path / "jobA"
+    job.mkdir()
+    for i in range(3):
+        (job / f"c{i}.mp4").write_bytes(b"v")
+    (job / "s_metadata.json").write_text(json.dumps({"shorts": [
+        {"video_url": f"/videos/jobA/c{i}.mp4", "video_title_for_youtube_short": f"T{i}"} for i in range(3)]}))
+    app._tg_set_mark(str(job), 1, {"status": "sent", "messageId": 1})  # already there
+    sent = []
+    monkeypatch.setattr(app._tg, "send_video", lambda t, c, path, text: sent.append((os.path.basename(path), text))
+                        or {"messageId": 2, "url": None})
+
+    async def finish(auto):
+        app._yt.save(app._TG_FILE, {"token": "T", "chat_id": "5", "auto_send": auto})
+        await app._telegram_auto_send("jobA", {"status": "completed"})
+        await asyncio.gather(*list(app._tg_tasks))
+
+    asyncio.run(finish(False))
+    assert sent == []  # off by default
+    asyncio.run(finish(True))
+    assert sorted(sent) == [("c0.mp4", "T0"), ("c2.mp4", "T2")]
+    marks = asyncio.run(app.telegram_sends("jobA"))["sends"]
+    assert {k: m["status"] for k, m in marks.items()} == {"0": "sent", "1": "sent", "2": "sent"}
+
+    async def backfill():
+        out = await app.telegram_send_unsent()
+        await asyncio.gather(*list(app._tg_tasks))
+        return out
+    assert asyncio.run(backfill())["queued"] == 0  # nothing left unsent

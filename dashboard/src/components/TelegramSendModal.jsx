@@ -11,10 +11,11 @@ export function TelegramMark({ mark, className = '', onDelete }) {
     const [busy, setBusy] = useState(false);
     if (!mark) return null;
     const status = mark.status || 'sent';  // marks from before background sends have none
-    if (status === 'sending') {
+    if (status === 'sending' || status === 'queued') {
         return (
-            <span className={`badge-brass inline-flex items-center gap-1 ${className}`} title={`Sending to ${mark.chat}…`}>
-                <Loader2 size={11} className="animate-spin" /> telegram…
+            <span className={`badge-brass inline-flex items-center gap-1 ${className}`}
+                title={status === 'queued' ? `Waiting for its turn (two send at a time) → ${mark.chat}` : `Sending to ${mark.chat}…`}>
+                <Loader2 size={11} className="animate-spin" /> {status === 'queued' ? 'queued' : 'telegram…'}
             </span>
         );
     }
@@ -93,7 +94,7 @@ export default function TelegramSendModal({ isOpen, onClose, clip, jobId, index,
                     </p>
                     {sent && sent.status !== 'failed' && (
                         <p className="text-xs text-muted flex flex-wrap items-center gap-2">
-                            Already {sent.status === 'sending' ? 'on its way' : 'sent'}: <TelegramMark mark={sent} /> Sending again posts it again.
+                            Already {['sending', 'queued'].includes(sent.status) ? 'on its way' : 'sent'}: <TelegramMark mark={sent} /> Sending again posts it again.
                         </p>
                     )}
                     <input className="input-field" placeholder="Title" value={title} onChange={(e) => setTitle(e.target.value)} />
@@ -106,7 +107,7 @@ export default function TelegramSendModal({ isOpen, onClose, clip, jobId, index,
                             <AlertTriangle size={14} className="shrink-0 mt-0.5" /> {error}
                         </p>
                     )}
-                    <button onClick={send} disabled={busy || sent?.status === 'sending'} className="btn-primary w-full py-2 text-sm">
+                    <button onClick={send} disabled={busy || ['sending', 'queued'].includes(sent?.status)} className="btn-primary w-full py-2 text-sm">
                         {busy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />} send in background
                     </button>
                     <p className="text-[0.7rem] text-muted text-center">You can close this, or the tab: the server keeps sending. The clip shows its status.</p>

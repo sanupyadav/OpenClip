@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Send, Check, Loader2, AlertTriangle, Search } from 'lucide-react';
 import { apiJson } from '../lib/api';
+import Switch from './Switch';
 
 // Self-host Settings: the user's own Telegram bot and the chat clips go to.
 // The token stays on the server (write-only).
@@ -32,6 +33,20 @@ export default function TelegramCard() {
         setStatus(s);
         setToken('');
         setChatId(s.chatId || '');
+    });
+
+    const setAuto = (on) => run(async () => {
+        setStatus(await apiJson('/api/telegram/config', {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ auto_send: on }),
+        }));
+    });
+
+    const [notice, setNotice] = useState('');
+    const sendUnsent = () => run(async () => {
+        if (!window.confirm('Send every clip in your gallery that is not on Telegram yet? They go in the background, two at a time.')) return;
+        const { queued } = await apiJson('/api/telegram/send-unsent', { method: 'POST' });
+        setNotice(queued ? `${queued} clip(s) queued. Watch the marks in the gallery; you can close this tab.` : 'Nothing to send: every clip is already on Telegram or on its way.');
     });
 
     const findChats = () => run(async () => {
@@ -87,6 +102,23 @@ export default function TelegramCard() {
                         {busy ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} Save
                     </button>
                 </div>
+                {status.ready && (
+                    <div className="mt-3 pt-3 border-t border-rule space-y-3">
+                        <div className="flex items-center justify-between gap-3">
+                            <div>
+                                <p className="text-sm text-ink">Auto-send new clips</p>
+                                <p className="text-xs text-muted">Every job that finishes sends all its clips here on its own.</p>
+                            </div>
+                            <Switch checked={!!status.autoSend} disabled={busy} onChange={setAuto} label="Auto-send new clips" />
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <button onClick={sendUnsent} disabled={busy} className="btn-quiet px-4 py-2 text-sm">
+                                <Send size={14} /> Send all unsent now
+                            </button>
+                            {notice && <span className="text-xs text-ok">{notice}</span>}
+                        </div>
+                    </div>
+                )}
                 {error && (
                     <p className="text-sm text-warn flex items-start gap-1.5 break-words">
                         <AlertTriangle size={14} className="shrink-0 mt-0.5" /> {error}

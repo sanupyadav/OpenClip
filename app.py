@@ -1652,6 +1652,8 @@ async def run_job_wrapper(job_id):
         # Autopilot bookkeeping + autopublish (before the generic clips-ready
         # email, which it replaces for its own jobs).
         await _autopilot_job_finished(job_id, job)
+        # Self-host: Settings → Telegram → Auto-send new clips.
+        await _telegram_auto_send(job_id, job)
         # Fire the caller's webhook (after archive, so durable links exist).
         await _notify_job_webhook(job_id)
         # Operational alerting for managed jobs (proxy out of credits / failures).
@@ -5808,6 +5810,7 @@ def _tg_status(cfg=None):
     cfg = _yt.load(_TG_FILE) if cfg is None else cfg
     return {"hasToken": bool(cfg.get("token")), "bot": cfg.get("bot"),
             "chatId": cfg.get("chat_id", ""), "chatTitle": cfg.get("chat_title"),
+            "autoSend": bool(cfg.get("auto_send")),
             "ready": bool(cfg.get("token") and cfg.get("chat_id"))}
 
 
@@ -5819,7 +5822,8 @@ async def telegram_status():
 
 class TelegramConfigRequest(BaseModel):
     bot_token: Optional[str] = None  # blank keeps the saved one
-    chat_id: str = ""
+    chat_id: Optional[str] = None     # None keeps the saved chat, "" clears it
+    auto_send: Optional[bool] = None  # None keeps the setting
 
 
 @app.put("/api/telegram/config")
@@ -5833,8 +5837,10 @@ async def telegram_config(req: TelegramConfigRequest):
             token = req.bot_token.strip()
             cfg["bot"] = await asyncio.to_thread(_tg.bot_name, token)
             cfg["token"] = token
-        chat = req.chat_id.strip()
-        if chat and cfg.get("token"):
+        if req.auto_send is not None:
+            cfg["auto_send"] = bool(req.auto_send)
+        chat = (req.chat_id if req.chat_id is not None else cfg.get("chat_id", "")).strip()
+        if chat and cfg.get("token") and (chat != cfg.get("chat_id") or req.bot_token):
             cfg["chat_title"] = await asyncio.to_thread(_tg.chat_title, cfg["token"], chat)
             cfg["chat_id"] = chat
         elif not chat:
@@ -5861,9 +5867,10 @@ async def telegram_chats():
 
 
 # Sends run in the background (compressing a big clip takes a while), so a
-# mark is "sending" first and "sent" / "failed" after. One still "sending"
-# after this long was cut by a restart.
-_TG_STALE_SECONDS = 3600
+# mark is "queued" (waiting for a slot), "sending", then "sent" / "failed".
+# _tg_live holds the (job dir, clip) this process is working on: a queued or
+# sending mark outside it was cut by a restart, however long it has waited.
+_tg_live = set()
 _tg_marks_lock = threading.Lock()
 _tg_tasks = set()  # keep a reference, or the event loop may drop a running send
 # Several clips can be sent at once ("send all"); two at a time keeps the
@@ -5873,9 +5880,9 @@ _tg_slots = asyncio.Semaphore(int(os.environ.get("TELEGRAM_PARALLEL_SENDS", "2")
 
 def tg_marks_at(path: str) -> dict:
     marks = _yt.load(path)
-    now = time.time()
-    for m in marks.values():
-        if m.get("status") == "sending" and now - (m.get("at") or 0) > _TG_STALE_SECONDS:
+    job_dir = os.path.dirname(path)
+    for idx, m in marks.items():
+        if m.get("status") in ("queued", "sending") and (job_dir, str(idx)) not in _tg_live:
             m.update(status="failed", error="Interrupted (the server restarted). Send it again.")
     return marks
 
@@ -5895,14 +5902,100 @@ def _tg_set_mark(job_dir: str, clip_index: int, mark):
 
 
 async def _tg_send_in_background(cfg, job_dir, clip_index, file_path, text, base):
+    key = (job_dir, str(clip_index))
     try:
         async with _tg_slots:
+            _tg_set_mark(job_dir, clip_index, {**base, "status": "sending", "at": time.time()})
             sent = await asyncio.to_thread(_tg.send_video, cfg["token"], cfg["chat_id"], file_path, text)
         mark = {**base, **sent, "status": "sent", "at": time.time()}
     except Exception as e:  # TelegramError, or anything unexpected: the mark must not stay "sending"
         mark = {**base, "status": "failed", "error": str(e)[:300], "at": time.time()}
         print(f"⚠️ Telegram send failed ({job_dir}, clip {clip_index}): {e}")
+    finally:
+        _tg_live.discard(key)
     _tg_set_mark(job_dir, clip_index, mark)
+
+
+def _tg_queue(cfg, job_dir, clip_index, file_path, title, description):
+    """Mark the clip "queued" and start its background send. Returns the mark."""
+    base = {"chat": cfg.get("chat_title") or cfg["chat_id"], "chatId": cfg["chat_id"]}
+    mark = {**base, "status": "queued", "at": time.time()}
+    _tg_live.add((job_dir, str(clip_index)))
+    _tg_set_mark(job_dir, clip_index, mark)
+    task = asyncio.create_task(_tg_send_in_background(
+        dict(cfg), job_dir, clip_index, file_path, _tg.caption(title, description), base))
+    _tg_tasks.add(task)
+    task.add_done_callback(_tg_tasks.discard)
+    return mark
+
+
+def _tg_unsent_clips(job_id):
+    """(index, file path, title, description) of every clip of a finished job
+    that is not sent and not on its way. Read from the metadata on disk."""
+    job_dir = _post_job_dir(job_id)
+    meta = glob.glob(os.path.join(job_dir, "*_metadata.json"))
+    if not meta or _local_job_running(job_id):
+        return []
+    clips = (_yt.load(meta[0]) or {}).get("shorts") or []
+    marks = tg_marks_at(os.path.join(job_dir, _TG_MARKS))
+    base = os.path.basename(meta[0]).replace("_metadata.json", "")
+    out = []
+    for i, c in enumerate(clips):
+        if c.get("deleted"):
+            continue
+        status = (marks.get(str(i)) or {}).get("status") or ("sent" if str(i) in marks else "")
+        if status in ("sent", "queued", "sending"):
+            continue
+        name = os.path.basename((c.get("video_url") or "").split("/")[-1]) or _canonical_clip_file(job_dir, base, i)
+        path = os.path.join(job_dir, name or "")
+        if name and os.path.isfile(path):
+            out.append((i, path, c.get("video_title_for_youtube_short") or c.get("title") or "",
+                        c.get("video_description_for_instagram") or c.get("video_description_for_tiktok") or ""))
+    return out
+
+
+def _tg_queue_unsent(job_id, cfg=None) -> int:
+    cfg = cfg or _yt.load(_TG_FILE)
+    if not (cfg.get("token") and cfg.get("chat_id")):
+        return 0
+    job_dir = _post_job_dir(job_id)
+    todo = _tg_unsent_clips(job_id)
+    for idx, path, title, description in todo:
+        _tg_queue(cfg, job_dir, idx, path, title, description)
+    return len(todo)
+
+
+async def _telegram_auto_send(job_id, job):
+    """Self-host, Settings → Telegram → Auto-send: a finished clip job sends
+    all its clips on its own. Never raises into the job's bookkeeping."""
+    if BILLING_ENABLED or (job or {}).get("status") != "completed":
+        return
+    try:
+        cfg = _yt.load(_TG_FILE)
+        if cfg.get("auto_send"):
+            n = _tg_queue_unsent(job_id, cfg)
+            if n:
+                print(f"📨 Telegram auto-send: {n} clip(s) of {job_id} queued")
+    except Exception as e:
+        print(f"⚠️ Telegram auto-send failed for {job_id}: {e}")
+
+
+@app.post("/api/telegram/send-unsent")
+async def telegram_send_unsent():
+    """Settings → Telegram → "Send all unsent now": every finished clip job
+    in output/, every clip not sent yet (two at a time in the background)."""
+    _yt_self_host()
+    cfg = _yt.load(_TG_FILE)
+    if not (cfg.get("token") and cfg.get("chat_id")):
+        raise HTTPException(status_code=400, detail="Set up Telegram in Settings first")
+    queued = 0
+    for name in sorted(os.listdir(OUTPUT_DIR)):
+        if os.path.isdir(os.path.join(OUTPUT_DIR, name)) and not name.startswith((".", "saas_", "thumbnails")):
+            try:
+                queued += _tg_queue_unsent(name, cfg)
+            except HTTPException:
+                continue
+    return {"queued": queued}
 
 
 @app.get("/api/telegram/sends/{job_id}")
@@ -5921,7 +6014,7 @@ async def telegram_unsend(job_id: str, clip_index: int, forget: bool = False):
     mark = tg_marks_at(os.path.join(job_dir, _TG_MARKS)).get(str(clip_index))
     if not mark:
         raise HTTPException(status_code=404, detail="This clip was not sent to Telegram")
-    if mark.get("status") == "sending":
+    if mark.get("status") in ("queued", "sending"):
         raise HTTPException(status_code=409, detail="It is still being sent; delete it once it arrives")
     if mark.get("status") == "failed":
         forget = True  # nothing arrived, so there is nothing to delete in the chat
@@ -5960,18 +6053,11 @@ async def telegram_send(req: TelegramSendRequest, request: Request):
     if not name or not os.path.isfile(file_path):
         raise HTTPException(status_code=404, detail="Video file not found")
     current = tg_marks_at(os.path.join(job_dir, _TG_MARKS)).get(str(req.clip_index)) or {}
-    if current.get("status") == "sending":
+    if current.get("status") in ("queued", "sending"):
         raise HTTPException(status_code=409, detail="This clip is already being sent")
     # Answer now and send in the background: compressing a clip over 50 MB
     # takes a while, and the user may close the dialog or the tab meanwhile.
-    base = {"chat": cfg.get("chat_title") or cfg["chat_id"], "chatId": cfg["chat_id"]}
-    mark = {**base, "status": "sending", "at": time.time()}
-    _tg_set_mark(job_dir, req.clip_index, mark)
-    task = asyncio.create_task(_tg_send_in_background(
-        dict(cfg), job_dir, req.clip_index, file_path, _tg.caption(req.title, req.description), base))
-    _tg_tasks.add(task)
-    task.add_done_callback(_tg_tasks.discard)
-    return mark
+    return _tg_queue(cfg, job_dir, req.clip_index, file_path, req.title, req.description)
 
 
 class SocialPostRequest(BaseModel):

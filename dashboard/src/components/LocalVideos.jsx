@@ -33,7 +33,7 @@ export default function LocalVideos({ onCount, onOpenSettings }) {
 
   // Sends run on the server in the background: poll the jobs that have one on its way.
   const sendingJobs = (jobs || [])
-    .filter((j) => j.videos.some((v) => v.telegram?.status === 'sending')).map((j) => j.job_id).join(',');
+    .filter((j) => j.videos.some((v) => ['sending', 'queued'].includes(v.telegram?.status))).map((j) => j.job_id).join(',');
   useEffect(() => {
     if (!sendingJobs) return;
     const t = setInterval(() => {
@@ -44,7 +44,7 @@ export default function LocalVideos({ onCount, onOpenSettings }) {
 
   // "Send all": every clip of the job that is not sent or on its way yet.
   const sendAll = async (job) => {
-    const todo = job.videos.filter((v) => v.index != null && !['sent', 'sending'].includes(v.telegram?.status || (v.telegram ? 'sent' : '')));
+    const todo = job.videos.filter((v) => v.index != null && !['sent', 'sending', 'queued'].includes(v.telegram?.status || (v.telegram ? 'sent' : '')));
     if (!todo.length) { setError('Every clip of this video is already sent or on its way.'); return; }
     if (!window.confirm(`Send ${todo.length} clip(s) to Telegram? They go in the background, two at a time.`)) return;
     setError('');

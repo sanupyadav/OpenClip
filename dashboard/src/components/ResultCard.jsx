@@ -77,7 +77,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     }, [billingEnabled, jobId, index]);
     // The server sends in the background: follow a "sending" mark until it lands.
     useEffect(() => {
-        if (tgMark?.status !== 'sending' || !jobId) return;
+        if (!['sending', 'queued'].includes(tgMark?.status) || !jobId) return;
         const t = setInterval(() => fetchTelegramSends(jobId).then((m) => setTgMark(m[String(index)] || null)), 4000);
         return () => clearInterval(t);
     }, [tgMark?.status, jobId, index]);

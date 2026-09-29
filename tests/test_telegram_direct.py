@@ -7,9 +7,12 @@ import pytest
 import telegram_direct as tg
 
 
+_REAL_CLIENT = httpx.Client  # before any test patches it, so _mock can run twice
+
+
 def _mock(monkeypatch, handler):
-    real = httpx.Client
-    monkeypatch.setattr(tg.httpx, "Client", lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+    monkeypatch.setattr(tg.httpx, "Client",
+                        lambda **kw: _REAL_CLIENT(transport=httpx.MockTransport(handler), **kw))
 
 
 def test_send_video_posts_the_file_with_caption_and_links_the_message(monkeypatch, tmp_path):
@@ -79,3 +82,42 @@ def test_config_is_write_only_and_a_send_is_marked_in_the_gallery(monkeypatch, t
     assert out["url"] == "https://t.me/mychan/9" and out["chat"] == "My Channel"
     assert asyncio.run(app.telegram_sends("jobT"))["sends"]["0"]["messageId"] == 9
     assert asyncio.run(app.list_local_videos())["jobs"][0]["videos"][0]["telegram"]["messageId"] == 9
+
+
+def test_delete_treats_gone_as_done_and_explains_the_48h_rule(monkeypatch):
+    _mock(monkeypatch, lambda r: httpx.Response(400, json={"ok": False, "description": "Bad Request: message to delete not found"}))
+    assert tg.delete_message("t", "1", 5) is True
+    _mock(monkeypatch, lambda r: httpx.Response(400, json={"ok": False, "description": "Bad Request: message can't be deleted"}))
+    with pytest.raises(tg.TelegramError, match="48 hours"):
+        tg.delete_message("t", "1", 5)
+
+
+def test_unsend_deletes_the_message_and_the_mark(monkeypatch, tmp_path):
+    monkeypatch.setattr(app, "BILLING_ENABLED", False)
+    monkeypatch.setattr(app, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(app, "_TG_FILE", str(tmp_path / ".telegram.json"))
+    app._yt.save(app._TG_FILE, {"token": "T", "chat_id": "@now"})
+    job = tmp_path / "jobD"
+    job.mkdir()
+    (job / "clip_0.mp4").write_bytes(b"v")
+    monkeypatch.setattr(app._tg, "send_video", lambda *a: {"messageId": 7, "url": None})
+    mark = asyncio.run(app.telegram_send(app.TelegramSendRequest(job_id="jobD", clip_index=0, input_filename="clip_0.mp4"), None))
+    assert mark["chatId"] == "@now"
+    app._yt.save(app._TG_FILE, {"token": "T", "chat_id": "@changed"})  # the saved chat, not today's, is used
+    calls = []
+    monkeypatch.setattr(app._tg, "delete_message", lambda token, chat, mid: calls.append((chat, mid)) or True)
+    assert asyncio.run(app.telegram_unsend("jobD", 0))["deleted"] is True
+    assert calls == [("@now", 7)] and asyncio.run(app.telegram_sends("jobD"))["sends"] == {}
+    with pytest.raises(app.HTTPException):
+        asyncio.run(app.telegram_unsend("jobD", 0))  # nothing left to delete
+    # Too old for Telegram: the error comes back, forget=true drops the mark alone.
+    asyncio.run(app.telegram_send(app.TelegramSendRequest(job_id="jobD", clip_index=0, input_filename="clip_0.mp4"), None))
+
+    def too_old(*a):
+        raise app._tg.TelegramError("only within 48 hours")
+    monkeypatch.setattr(app._tg, "delete_message", too_old)
+    with pytest.raises(app.HTTPException) as e:
+        asyncio.run(app.telegram_unsend("jobD", 0))
+    assert e.value.status_code == 409
+    assert asyncio.run(app.telegram_unsend("jobD", 0, forget=True))["forgotten"] is True
+    assert asyncio.run(app.telegram_sends("jobD"))["sends"] == {}

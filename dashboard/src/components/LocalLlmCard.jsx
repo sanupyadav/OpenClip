@@ -29,7 +29,7 @@ export function LlmGatewayForm({ gateway, onSaved }) {
             if (clear) { setBaseUrl(''); setModel(''); }
             onSaved?.(res);
         } catch (e) {
-            setError(e.message || 'Could not save');
+            setError(e.detail || e.message || 'Could not save');
         } finally {
             setSaving(false);
         }
@@ -79,7 +79,7 @@ function OllamaSection({ ollama, useOllama, onSaved }) {
             if (!res.models?.length) setError('Ollama answered but has no models. Run: ollama pull llama3.2');
         } catch (e) {
             setModels([]);
-            setError(e.message || 'Could not reach Ollama');
+            setError(e.detail || e.message || 'Could not reach Ollama');
         } finally {
             setLoading(false);
         }
@@ -98,7 +98,7 @@ function OllamaSection({ ollama, useOllama, onSaved }) {
         try {
             onSaved?.(await putJson('/api/llm/ollama', { url, model, enabled }));
         } catch (e) {
-            setError(e.message || 'Could not save');
+            setError(e.detail || e.message || 'Could not save');
         } finally {
             setSaving(false);
         }
@@ -154,7 +154,7 @@ export default function LocalLlmCard({ llm, settings, onSaved }) {
         try {
             setResult(await apiJson('/api/llm/test', { method: 'POST' }));
         } catch (e) {
-            setResult({ ok: false, error: e.message || 'Request failed' });
+            setResult({ ok: false, error: e.detail || e.message || 'Request failed' });
         } finally {
             setTesting(false);
         }

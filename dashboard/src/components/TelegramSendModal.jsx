@@ -1,16 +1,29 @@
 import React, { useState, useEffect } from 'react';
-import { Send, Loader2, Check, ExternalLink, AlertTriangle } from 'lucide-react';
+import { Send, Loader2, Check, ExternalLink, AlertTriangle, Trash2 } from 'lucide-react';
 import Modal from './ui/Modal';
 import { apiJson } from '../lib/api';
 
-// The "already sent to Telegram" mark; links to the message when the chat has one.
-export function TelegramMark({ mark, className = '' }) {
+// The "already sent to Telegram" mark; links to the message when the chat has
+// one. With onDelete it also offers to delete the message from the chat.
+export function TelegramMark({ mark, className = '', onDelete }) {
+    const [busy, setBusy] = useState(false);
     if (!mark) return null;
     const body = <><Send size={11} /> telegram <Check size={11} /></>;
-    const cls = `badge-ok inline-flex items-center gap-1 ${className}`;
-    return mark.url
-        ? <a href={mark.url} target="_blank" rel="noopener noreferrer" title={`Sent to ${mark.chat}`} className={cls}>{body}</a>
-        : <span title={`Sent to ${mark.chat}`} className={cls}>{body}</span>;
+    const cls = 'badge-ok inline-flex items-center gap-1';
+    return (
+        <span className={`inline-flex items-center gap-1 ${className}`}>
+            {mark.url
+                ? <a href={mark.url} target="_blank" rel="noopener noreferrer" title={`Sent to ${mark.chat}`} className={cls}>{body}</a>
+                : <span title={`Sent to ${mark.chat}`} className={cls}>{body}</span>}
+            {onDelete && (
+                <button type="button" disabled={busy} title="Delete it from the Telegram chat"
+                    className="badge-ok inline-flex items-center px-1.5 hover:text-warn"
+                    onClick={async (e) => { e.preventDefault(); setBusy(true); try { await onDelete(); } finally { setBusy(false); } }}>
+                    {busy ? <Loader2 size={11} className="animate-spin" /> : <Trash2 size={11} />}
+                </button>
+            )}
+        </span>
+    );
 }
 
 // Self-host: send one clip to the Telegram chat set in Settings, with the
@@ -44,7 +57,7 @@ export default function TelegramSendModal({ isOpen, onClose, clip, jobId, index,
             setResult(res);
             onSent?.(res);
         } catch (e) {
-            setError(e.message || 'Send failed');
+            setError(e.detail || e.message || 'Send failed');
         } finally {
             setBusy(false);
         }

@@ -5866,6 +5866,31 @@ async def telegram_sends(job_id: str):
     return {"sends": _yt.load(os.path.join(_post_job_dir(job_id), _TG_MARKS))}
 
 
+@app.delete("/api/telegram/sends/{job_id}/{clip_index}")
+async def telegram_unsend(job_id: str, clip_index: int, forget: bool = False):
+    """Delete the sent clip from the chat (within Telegram's 48 h) and drop
+    the mark. forget=true only drops the mark, for a message the bot can no
+    longer delete."""
+    _yt_self_host()
+    marks_path = os.path.join(_post_job_dir(job_id), _TG_MARKS)
+    marks = _yt.load(marks_path)
+    mark = marks.get(str(clip_index))
+    if not mark:
+        raise HTTPException(status_code=404, detail="This clip was not sent to Telegram")
+    if not forget:
+        cfg = _yt.load(_TG_FILE)
+        chat_id = mark.get("chatId") or cfg.get("chat_id")  # older marks have no chatId
+        if not (cfg.get("token") and chat_id and mark.get("messageId")):
+            raise HTTPException(status_code=400, detail="Telegram is not set up, so the message cannot be deleted")
+        try:
+            await asyncio.to_thread(_tg.delete_message, cfg["token"], chat_id, mark["messageId"])
+        except _tg.TelegramError as e:
+            raise HTTPException(status_code=409, detail=f"Telegram: {e}")
+    marks.pop(str(clip_index), None)
+    _yt.save(marks_path, marks)
+    return {"deleted": not forget, "forgotten": True}
+
+
 class TelegramSendRequest(BaseModel):
     job_id: str
     clip_index: int
@@ -5892,7 +5917,7 @@ async def telegram_send(req: TelegramSendRequest, request: Request):
                                        _tg.caption(req.title, req.description))
     except _tg.TelegramError as e:
         raise HTTPException(status_code=400, detail=f"Telegram: {e}")
-    mark = {**sent, "chat": cfg.get("chat_title") or cfg["chat_id"], "at": time.time()}
+    mark = {**sent, "chat": cfg.get("chat_title") or cfg["chat_id"], "chatId": cfg["chat_id"], "at": time.time()}
     marks_path = os.path.join(job_dir, _TG_MARKS)
     marks = _yt.load(marks_path)
     marks[str(req.clip_index)] = mark

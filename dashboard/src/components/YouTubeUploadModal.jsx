@@ -54,7 +54,7 @@ export default function YouTubeUploadModal({ isOpen, onClose, clip, jobId, index
             setResult(res);
             onUploaded?.(res);
         } catch (e) {
-            setError(e.message || 'Upload failed');
+            setError(e.detail || e.message || 'Upload failed');
         } finally {
             setBusy(false);
         }

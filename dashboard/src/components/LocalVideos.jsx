@@ -4,6 +4,7 @@ import { apiJson } from '../lib/api';
 import { getApiUrl } from '../config';
 import YouTubeUploadModal, { YouTubeMark } from './YouTubeUploadModal';
 import TelegramSendModal, { TelegramMark } from './TelegramSendModal';
+import { unsendTelegram } from '../lib/telegram';
 
 const mmss = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
 
@@ -135,7 +136,12 @@ export default function LocalVideos({ onCount, onOpenSettings }) {
                 <span className="absolute top-2 left-2 z-10 badge-brass font-mono">#{i + 1}</span>
                 <div className="absolute top-2 right-2 z-10 flex flex-col items-end gap-1">
                   <YouTubeMark mark={v.youtube} />
-                  <TelegramMark mark={v.telegram} />
+                  <TelegramMark mark={v.telegram} onDelete={async () => {
+                    if (!(await unsendTelegram(job.job_id, v.index))) return;
+                    setJobs((js) => js.map((j) => (j.job_id !== job.job_id ? j : {
+                      ...j, videos: j.videos.map((x) => (x.index === v.index ? { ...x, telegram: null } : x)),
+                    })));
+                  }} />
                 </div>
                 <video src={getApiUrl(v.url)} controls preload="metadata" className="w-full aspect-[9/16] bg-black object-contain" />
                 <div className="p-2 flex items-start justify-between gap-2">

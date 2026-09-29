@@ -73,6 +73,22 @@ def message_link(chat: dict, message_id: int):
     return None
 
 
+def delete_message(token: str, chat_id: str, message_id: int) -> bool:
+    """Delete a message the bot sent. Telegram only allows it for messages
+    under 48 hours old. True also when it is already gone (deleted by hand)."""
+    try:
+        _call(token, "deleteMessage", data={"chat_id": chat_id, "message_id": message_id})
+    except TelegramError as e:
+        text = str(e).lower()
+        if "not found" in text:
+            return True
+        if "can't be deleted" in text or "cannot be deleted" in text:
+            raise TelegramError("Telegram lets a bot delete a message only within 48 hours of sending it "
+                                "(or it lacks the delete right in that group/channel). Delete it in the app.")
+        raise
+    return True
+
+
 def send_video(token: str, chat_id: str, file_path: str, text: str) -> dict:
     size = os.path.getsize(file_path)
     if size > MAX_BYTES:

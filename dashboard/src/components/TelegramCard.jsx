@@ -21,7 +21,7 @@ export default function TelegramCard() {
     const run = async (fn) => {
         setBusy(true);
         setError('');
-        try { await fn(); } catch (e) { setError(e.message || 'Request failed'); } finally { setBusy(false); }
+        try { await fn(); } catch (e) { setError(e.detail || e.message || 'Request failed'); } finally { setBusy(false); }
     };
 
     const save = (chat = chatId) => run(async () => {

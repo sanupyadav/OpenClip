@@ -11,6 +11,7 @@ import WatermarkModal, { watermarkNoticeDismissed } from './WatermarkModal';
 import TikTokDraftNotice from './TikTokDraftNotice';
 import YouTubeUploadModal, { YouTubeMark } from './YouTubeUploadModal';
 import TelegramSendModal, { TelegramMark } from './TelegramSendModal';
+import { unsendTelegram } from '../lib/telegram';
 import { useAuth } from '../contexts/AuthContext';
 import { renderInBrowser } from '../lib/renderInBrowser';
 
@@ -877,7 +878,8 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     )}
                     <div className="flex flex-wrap gap-1.5">
                         <YouTubeMark mark={ytMark} className="shrink-0" />
-                        <TelegramMark mark={tgMark} className="shrink-0" />
+                        <TelegramMark mark={tgMark} className="shrink-0"
+                            onDelete={async () => { if (await unsendTelegram(jobId, index)) setTgMark(null); }} />
                         {durationReadout && <span className="readout bg-paper3 px-2 py-0.5 rounded-full shrink-0">{durationReadout}</span>}
                         {resolution && <span className="readout bg-paper3 px-2 py-0.5 rounded-full shrink-0">{resolution}</span>}
                         <span className="readout bg-paper3 px-2 py-0.5 rounded-full shrink-0">#shorts</span>

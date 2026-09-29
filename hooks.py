@@ -1,6 +1,8 @@
+import functools
 import os
 import re
 import textwrap
+import unicodedata
 import subprocess
 import urllib.request
 import uuid
@@ -108,6 +110,64 @@ def _emoji_scale(font, emoji_font):
     return target / float(native) if native else 1.0
 
 
+@functools.lru_cache(maxsize=32)
+def _cmap(path):
+    """Codepoints a font file has glyphs for, or None when unreadable."""
+    try:
+        from fontTools.ttLib import TTFont
+        return frozenset(TTFont(path, lazy=True, fontNumber=0).getBestCmap())
+    except Exception:
+        return None
+
+
+def attach_script_fallback(font, font_path, text):
+    """The hook typefaces are Latin-only: a hook in Hindi, Bengali, Arabic...
+    drew tofu boxes. Attach the system font fontconfig picks for the missing
+    characters; _script_runs draws those runs with it and the rest with the
+    chosen typeface, so Hinglish keeps both. Needs a font for that script on
+    the host (fonts-noto-core)."""
+    main = _cmap(font_path)
+    if not main:
+        return font
+    missing = sorted({ord(c) for c in text
+                      if not c.isspace() and ord(c) not in main and not _EMOJI_RE.match(c)})
+    if not missing:
+        return font
+    try:
+        charset = " ".join(f"{c:x}" for c in missing[:24])
+        out = subprocess.run(["fc-match", "-f", "%{file}", f":charset={charset}:weight=bold"],
+                             capture_output=True, text=True, timeout=10)
+        path = out.stdout.strip()
+    except Exception:
+        return font
+    alt = _cmap(path) if path and os.path.exists(path) else None
+    if not alt or not any(c in alt for c in missing):
+        print(f"⚠️ [Hook] no installed font has these characters ({chr(missing[0])}…): they may show as boxes")
+        return font
+    try:
+        font._script_fallback = (ImageFont.truetype(path, font.size), main)
+    except Exception:
+        pass
+    return font
+
+
+def _script_runs(text, font):
+    """(font, run) pieces of a non-emoji chunk: characters the typeface has
+    stay on it, the rest go to the attached script fallback."""
+    fallback = getattr(font, "_script_fallback", None)
+    if not fallback:
+        return [(font, text)]
+    alt, main = fallback
+    runs = []
+    for ch in text:
+        f = font if (ord(ch) in main and not unicodedata.combining(ch)) else alt
+        if runs and runs[-1][0] is f:
+            runs[-1] = (f, runs[-1][1] + ch)
+        else:
+            runs.append((f, ch))
+    return runs
+
+
 def _measure_width(draw, text, font, emoji_font):
     """Pixel width of a line, measuring emoji runs with the emoji font.
 
@@ -118,7 +178,7 @@ def _measure_width(draw, text, font, emoji_font):
             width += (draw.textlength(chunk, font=emoji_font[0])
                       * _emoji_scale(font, emoji_font))
         else:
-            width += draw.textlength(chunk, font=font)
+            width += sum(draw.textlength(part, font=f) for f, part in _script_runs(chunk, font))
     return width
 
 
@@ -158,12 +218,13 @@ def _draw_mixed(img, draw, xy, text, font, emoji_font, fill, outline=None):
                 img.alpha_composite(rendered, (int(x), int(y)))
                 x += draw.textlength(chunk, font=emoji_font[0]) * scale
         else:
-            if stroke_w:
-                draw.text((x, y), chunk, font=font, fill=fill,
-                          stroke_width=stroke_w, stroke_fill=stroke_fill)
-            else:
-                draw.text((x, y), chunk, font=font, fill=fill)
-            x += draw.textlength(chunk, font=font)
+            # One baseline for every run: fonts differ in ascent, and drawing
+            # each from its own top edge would shift the Hindi up or down.
+            baseline = y + font.getmetrics()[0]
+            for f, part in _script_runs(chunk, font):
+                kw = {"stroke_width": stroke_w, "stroke_fill": stroke_fill} if stroke_w else {}
+                draw.text((x, baseline), part, font=f, fill=fill, anchor="ls", **kw)
+                x += draw.textlength(part, font=f)
 
 
 def _break_long_word(draw, word, font, emoji_font, max_width):
@@ -285,6 +346,7 @@ def create_hook_image(text, target_width, output_image_path="hook_overlay.png", 
     
     try:
         font = ImageFont.truetype(font_path, font_size)
+        font = attach_script_fallback(font, font_path, text)
     except Exception as e:
         print(f"⚠️ Warning: Could not load font {font_path}, using default. Error: {e}")
         font = ImageFont.load_default()

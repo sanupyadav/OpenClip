@@ -36,6 +36,9 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Install FFmpeg, OpenCV deps, Node.js + npm + git (for yt-dlp JS + bgutil build).
+# fonts-noto-core covers the non-Latin scripts (Devanagari, Bengali, Tamil,
+# Arabic...): the bundled Anton/Montserrat are Latin-only, and without it a
+# Hindi subtitle or hook rendered as boxes.
 # fontconfig + fonts-liberation back the subtitle font choices: without real
 # fonts libass falls back to DejaVu for every UI option (issue #57).
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -52,6 +55,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fontconfig \
     fonts-liberation \
     fonts-noto-color-emoji \
+    fonts-noto-core \
     && rm -rf /var/lib/apt/lists/*
 
 # Deno JS runtime — required by yt-dlp for some extractor challenges.

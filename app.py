@@ -2571,6 +2571,67 @@ async def test_local_llm():
                 "seconds": round(time.time() - started, 1), "error": str(e)[:300]}
 
 
+_LLM_CONFIG_FILE = os.path.join(OUTPUT_DIR, ".llm.json")
+_LLM_ENV = ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL")
+
+
+def _load_saved_llm():
+    """Self-host: the gateway saved from the dashboard wins over .env, so a
+    change made in the UI survives a restart. Jobs inherit it via child_env."""
+    try:
+        with open(_LLM_CONFIG_FILE) as f:
+            saved = json.load(f)
+    except (OSError, ValueError):
+        return
+    for name in _LLM_ENV:
+        if saved.get(name):
+            os.environ[name] = saved[name]
+
+
+if not BILLING_ENABLED:
+    _load_saved_llm()
+
+
+class LlmConfigRequest(BaseModel):
+    base_url: str = ""
+    api_key: Optional[str] = None  # None/"" keeps the key already set
+    model: str = ""
+
+
+@app.put("/api/llm/config")
+async def set_local_llm(req: LlmConfigRequest):
+    """Self-host dashboard: point the moment picker at an OpenAI-compatible
+    gateway (or clear it with an empty base_url). The key is write-only: it
+    is never sent back, /api/config only says whether one is set."""
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Not Found")
+    base = req.base_url.strip().rstrip("/")
+    if not base:
+        for name in _LLM_ENV:
+            os.environ.pop(name, None)
+        try:
+            os.remove(_LLM_CONFIG_FILE)
+        except FileNotFoundError:
+            pass
+        return {"localLlm": None}
+    if not base.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="The server URL must start with http:// or https://")
+    if not base.endswith("/v1"):
+        base += "/v1"  # OpenAI-compatible servers serve /v1/chat/completions
+    os.environ["LLM_BASE_URL"] = base
+    if req.model.strip():
+        os.environ["LLM_MODEL"] = req.model.strip()
+    if req.api_key and req.api_key.strip():
+        os.environ["LLM_API_KEY"] = req.api_key.strip()
+    try:
+        fd = os.open(_LLM_CONFIG_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump({name: os.environ.get(name, "") for name in _LLM_ENV}, f)
+    except OSError as e:
+        print(f"⚠️ Could not save the LLM gateway: {e}")
+    return {"localLlm": llm_backend.describe()}
+
+
 def _local_job_running(job_id: str) -> bool:
     job = jobs.get(job_id) or saas_jobs.get(job_id.removeprefix("saas_")) or {}
     return (job.get("status") in ("queued", "processing")

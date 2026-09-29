@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Square, Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Menu, Lock, Rocket } from 'lucide-react';
 import KeyInput from './components/KeyInput';
-import LocalLlmCard from './components/LocalLlmCard';
+import LocalLlmCard, { LlmGatewayForm } from './components/LocalLlmCard';
 import QueueTab from './components/QueueTab';
 import ElapsedTimer from './components/ElapsedTimer';
 import { jobProgress } from './lib/jobProgress';
@@ -270,7 +270,7 @@ const pollJob = async (jobId) => {
 
 function App() {
   // Cloud auth/billing session (inert when billing is disabled).
-  const { billingEnabled, isManaged, isSignedIn, me, plan, refreshMe, jobRetentionSeconds, localLlm } = useAuth();
+  const { billingEnabled, isManaged, isSignedIn, me, plan, refreshMe, jobRetentionSeconds, localLlm, setLocalLlm } = useAuth();
   const [showLogin, setShowLogin] = useState(false);
   const [showTopUp, setShowTopUp] = useState(false);
   const [showPlanChoice, setShowPlanChoice] = useState(false);
@@ -1558,7 +1558,7 @@ function App() {
                 </div>
               ) : (
                 <>
-              {localLlm && <LocalLlmCard llm={localLlm} />}
+              {!billingEnabled && <LocalLlmCard llm={localLlm} onSaved={setLocalLlm} />}
               <KeyInput onKeySet={setApiKey} savedKey={apiKey} />
 
               <div className="card p-4 sm:p-6 mt-8">
@@ -2317,7 +2317,7 @@ function App() {
         isOpen={showKeyModal}
         onClose={() => setShowKeyModal(false)}
         eyebrow="SETUP"
-        title="Gemini API Key Required"
+        title="AI Model Required"
         footer={
           <div className="flex gap-3">
             <button
@@ -2337,7 +2337,7 @@ function App() {
       >
         <div className="space-y-4">
           <p className="text-sm text-muted">
-            Clipping needs a <strong className="text-ink2">Gemini</strong> API key (free tier available). Publishing to socials asks for an Upload-Post key later, in Settings.
+            Clipping needs an AI model: a <strong className="text-ink2">Gemini</strong> API key (free tier available), or your own OpenAI-compatible gateway below. Publishing to socials asks for an Upload-Post key later, in Settings.
           </p>
 
           {/* Gemini block */}
@@ -2355,8 +2355,9 @@ function App() {
                   <li>Copy the key and paste it below</li>
                 </ol>
                 <input
-                  type="text"
-                  placeholder="Paste your Gemini API key here..."
+                  type="password"
+                  autoComplete="off"
+                  placeholder="Paste your Gemini API key and press Enter..."
                   className="input-field"
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && e.target.value.trim()) {
@@ -2366,6 +2367,17 @@ function App() {
                 />
               </>
             )}
+          </div>
+
+          {/* Or: own OpenAI-compatible gateway (self-host) */}
+          <div className="rounded-input p-4 space-y-2 border border-rule2">
+            <p className="text-xs font-medium text-ink flex items-center gap-2">
+              <Bot size={12} className="text-brass" /> Or use your own AI gateway (OpenAI-compatible)
+            </p>
+            <LlmGatewayForm
+              llm={localLlm}
+              onSaved={(next) => { setLocalLlm(next); if (next) setShowKeyModal(false); }}
+            />
           </div>
 
         </div>

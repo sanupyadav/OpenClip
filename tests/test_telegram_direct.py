@@ -123,27 +123,6 @@ def test_unsend_deletes_the_message_and_the_mark(monkeypatch, tmp_path):
     assert asyncio.run(app.telegram_sends("jobD"))["sends"] == {}
 
 
-def test_chat_ids_people_paste_are_normalized():
-    assert tg.normalize_chat_id(" 1003947782883 ") == "-1003947782883"
-    assert tg.normalize_chat_id("-1003947782883") == "-1003947782883"
-    assert tg.normalize_chat_id("1177375146") == "1177375146"  # a user id stays positive
-    assert tg.normalize_chat_id("https://t.me/mychan") == "@mychan"
-    assert tg.normalize_chat_id("@mychan") == "@mychan"
-
-
-def test_chat_not_found_names_the_bot_and_the_fix(monkeypatch, tmp_path):
-    monkeypatch.setattr(app, "BILLING_ENABLED", False)
-    monkeypatch.setattr(app, "_TG_FILE", str(tmp_path / ".telegram.json"))
-    app._yt.save(app._TG_FILE, {"token": "T", "bot": "membixbot"})
-
-    def not_found(token, chat):
-        raise tg.TelegramError("Bad Request: chat not found")
-    monkeypatch.setattr(app._tg, "chat_title", not_found)
-    with pytest.raises(app.HTTPException) as e:
-        asyncio.run(app.telegram_config(app.TelegramConfigRequest(chat_id="1003947782883")))
-    assert "@membixbot" in e.value.detail and "-1003947782883" in e.value.detail
-
-
 def test_a_clip_over_the_limit_is_sent_as_a_compressed_copy(monkeypatch, tmp_path):
     import shutil
     import subprocess

@@ -59,19 +59,6 @@ def recent_chats(token: str) -> list:
     return list(seen.values())
 
 
-def normalize_chat_id(chat_id: str) -> str:
-    """What people paste: a group id missing its minus ("1003947782883"),
-    spaces, a t.me/name link. Groups and channels are -100..., users are
-    positive, public chats can be @name."""
-    c = (chat_id or "").strip().replace(" ", "")
-    for prefix in ("https://t.me/", "http://t.me/", "t.me/"):
-        if c.startswith(prefix) and not c[len(prefix):].startswith(("+", "c/", "joinchat")):
-            c = "@" + c[len(prefix):].split("/")[0]
-    if c.isdigit() and c.startswith("100") and len(c) >= 13:
-        c = "-" + c
-    return c
-
-
 def chat_title(token: str, chat_id: str) -> str:
     chat = _call(token, "getChat", data={"chat_id": chat_id})
     return chat.get("title") or chat.get("first_name") or chat.get("username") or str(chat_id)

@@ -1,3 +1,4 @@
+import copy
 import time
 import cv2
 import subprocess
@@ -965,8 +966,9 @@ def download_youtube_video(url, output_dir=".", on_audio=None):
             break
 
     def _early_audio(info, extractor_args, proxy, cookies):
-        """Fetch the audio track alone and hand it to on_audio (background)."""
-        import copy
+        """Fetch the audio track alone and hand it to on_audio (background).
+        `info` must be this thread's own copy: the video download mutates the
+        caller's dict at the same time ("dictionary changed size")."""
         try:
             opts = {
                 **_base_opts(extractor_args, proxy, cookies),
@@ -976,7 +978,7 @@ def download_youtube_video(url, output_dir=".", on_audio=None):
                 'overwrites': True,
             }
             with yt_dlp.YoutubeDL(opts) as ydl:
-                res = ydl.process_ie_result(copy.deepcopy(info), download=True)
+                res = ydl.process_ie_result(info, download=True)
             path = ((res.get('requested_downloads') or [{}])[0].get('filepath')
                     or res.get('filepath'))
             if path and os.path.exists(path):
@@ -1010,7 +1012,8 @@ def download_youtube_video(url, output_dir=".", on_audio=None):
         if (on_audio and not _early["started"] and info.get('formats') and not ranged
                 and not (_proxy and proxy == _proxy)):
             _early["started"] = True
-            threading.Thread(target=_early_audio, args=(info, extractor_args, proxy, cookies),
+            threading.Thread(target=_early_audio,
+                             args=(copy.deepcopy(info), extractor_args, proxy, cookies),
                              daemon=True).start()
         expected = os.path.join(output_dir, f'{sanitized}.mp4')
         if os.path.exists(expected):

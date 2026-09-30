@@ -16,6 +16,16 @@ const MIN_SOURCE_SECONDS = 45;
 
 // Duration of a local video file in seconds, or null when the browser cannot
 // read it (unsupported codec): then the server stays the judge.
+// "This video: auto ~4-8 clips, up to 12": mirrors clip_selection.py
+// (shortlist_target + clip_count_targets) so the hint matches what a job does.
+const clipEstimate = (seconds, minSeconds) => {
+    const n = Math.max(3, Math.min(10, Math.floor(seconds / 90) + 2));
+    const high = Math.min(12, Math.max(4, n * 2));
+    const low = Math.min(high, Math.max(2, Math.min(6, Math.floor(n / 2) + 2)));
+    const most = Math.max(1, Math.min(15, Math.floor(seconds / (Number(minSeconds) || 15))));
+    return `This video (${Math.round(seconds / 60)} min): auto gives ~${Math.min(low, most)}-${Math.min(high, most)} clips, you can ask for up to ${most}.`;
+};
+
 const readVideoDuration = (file) => new Promise((resolve) => {
     try {
         const url = URL.createObjectURL(file);
@@ -60,6 +70,11 @@ export default function MediaInput({ onProcess, isProcessing }) {
     // depend on the detector, and 'none' keeps the plain single crop.
     const [layout, setLayout] = useState(() => {
         try { return localStorage.getItem('os_layout') || 'auto'; } catch { return 'auto'; }
+    });
+    // Subtitle language: Hinglish by default. Detection alone calls
+    // code-mixed Hindi "English" and translates it; this pins it.
+    const [subtitleLanguage, setSubtitleLanguage] = useState(() => {
+        try { return localStorage.getItem('os_sub_lang') || 'hinglish'; } catch { return 'hinglish'; }
     });
     const infoRef = useRef(null);
 
@@ -124,11 +139,13 @@ export default function MediaInput({ onProcess, isProcessing }) {
             autoHook,
             autoHookStyle,
             layout,
+            subtitleLanguage,
         };
         try {
             localStorage.setItem('os_auto_hook', autoHook ? '1' : '0');
             localStorage.setItem('os_auto_hook_style_v2', autoHookStyle);
             localStorage.setItem('os_layout', layout);
+            localStorage.setItem('os_sub_lang', subtitleLanguage);
         } catch { /* ignore */ }
         if (mode === 'url' && url) {
             onProcess({ type: 'url', payload: url, acknowledged: true, outputFormat, ...advanced });
@@ -338,9 +355,24 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                 />
                             </div>
                             <p className="col-span-1 sm:col-span-3 text-[11px] leading-relaxed text-muted">
+                                {fileSeconds ? <>{clipEstimate(fileSeconds, clipMinSeconds)} </> : null}
                                 Targets, not guarantees: the AI returns fewer clips when the
                                 material doesn't hold them. Leave blank to let it decide.
                             </p>
+                            <div className="col-span-1 sm:col-span-3 flex flex-wrap items-center justify-between gap-3 pt-3 sm:pt-1 border-t border-rule">
+                                <span className="text-xs text-ink2">subtitle language</span>
+                                <select
+                                    value={subtitleLanguage}
+                                    onChange={(e) => setSubtitleLanguage(e.target.value)}
+                                    className="input-field !w-auto text-xs py-1.5"
+                                    aria-label="subtitle language"
+                                >
+                                    <option value="hinglish">Hinglish (Roman letters)</option>
+                                    <option value="hindi">Hindi (देवनागरी)</option>
+                                    <option value="english">English</option>
+                                    <option value="auto">Auto-detect</option>
+                                </select>
+                            </div>
                             <div className="col-span-1 sm:col-span-3 flex flex-wrap items-center justify-between gap-3 pt-3 sm:pt-1 border-t border-rule">
                                 <span className="text-xs text-ink2">vertical layout</span>
                                 <select

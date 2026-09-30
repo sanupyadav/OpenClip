@@ -4,6 +4,7 @@ Pure helpers for the Gemini clip-selection pipeline.
 Standard-library only so both main.py and gemini_worker.py can import it and
 the logic stays unit-testable without the heavy video dependencies.
 """
+import os
 
 # USD per 1M tokens (input, output incl. thinking), from ai.google.dev pricing.
 MODEL_PRICES = {
@@ -78,7 +79,14 @@ def shortlist_target(video_duration):
         seconds = float(video_duration or 0)
     except (TypeError, ValueError):
         seconds = 0.0
-    return max(3, min(10, int(seconds // 90) + 2))
+    auto = max(3, min(10, int(seconds // 90) + 2))
+    # A pinned clip count (CLIP_TARGET_MAX) needs about one window per clip,
+    # or asking for 15 on a long video still gets at most 10 candidates.
+    try:
+        pinned = int(os.environ.get("CLIP_TARGET_MAX") or 0)
+    except ValueError:
+        pinned = 0
+    return max(auto, min(15, pinned))
 
 
 def score_batches(windows, batch_size):

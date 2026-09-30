@@ -225,8 +225,9 @@ def run_whisper_transcription(media_path, **params):
         return _run_whisper_once(media_path, **params)
 
 
-def _transcribe_with_whisper(media_path):
-    segments, info = run_whisper_transcription(media_path, **WHISPER_TRANSCRIBE_PARAMS)
+def _transcribe_with_whisper(media_path, language=None):
+    params = dict(WHISPER_TRANSCRIBE_PARAMS, language=language) if language else WHISPER_TRANSCRIBE_PARAMS
+    segments, info = run_whisper_transcription(media_path, **params)
 
     out_segments = []
     text_parts = []
@@ -546,6 +547,12 @@ def transcribe_media(media_path):
             "speech, so it needs a video with audio.")
 
     backend = os.environ.get("TRANSCRIBE_BACKEND", "whisper").strip().lower()
+    # Per-job language (the dashboard's "subtitle language"). Detection is not
+    # enough for Hindi: code-mixed Hindi/English speech comes back as 'en' at
+    # 0.95+ and whisper then TRANSLATES it to English.
+    forced = os.environ.get("TRANSCRIBE_LANGUAGE", "").strip().lower() or None
+    if forced and forced not in PARAKEET_LANGS:
+        backend = "whisper"
 
     if backend == "parakeet":
         try:
@@ -561,4 +568,4 @@ def transcribe_media(media_path):
             print(f"⚠️ [ASR] parakeet failed ({type(e).__name__}: {e}) — "
                   f"falling back to whisper")
 
-    return _transcribe_with_whisper(media_path)
+    return _transcribe_with_whisper(media_path, forced)

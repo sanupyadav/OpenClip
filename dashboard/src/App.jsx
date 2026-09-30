@@ -1032,6 +1032,7 @@ function App() {
         // Set when the user took the quota wall's "clip the first N minutes"
         // offer: the server reserves N minutes and cuts the source to them.
         max_minutes: data.maxMinutes || null,
+        subtitle_language: data.subtitleLanguage && data.subtitleLanguage !== 'auto' ? data.subtitleLanguage : null,
       };
 
       if (data.type === 'url') {

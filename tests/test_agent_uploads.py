@@ -185,3 +185,15 @@ def test_chunked_put_appends_and_completes_on_final(dirs):
     assert resp.status_code == 200 and resp.json()["bytes"] == 17
     s = app_module.pending_uploads[slot["upload_id"]]
     assert s["complete"] and open(s["path"], "rb").read() == b"a" * 10 + b"c" * 7
+
+
+def test_subtitle_language_pins_whisper(monkeypatch):
+    import transcribe_backends as tb
+    seen = {}
+    monkeypatch.setattr(tb, "_has_audio_stream", lambda p: True)
+    monkeypatch.setattr(tb, "_transcribe_with_whisper", lambda p, lang=None: seen.setdefault("lang", lang))
+    monkeypatch.setenv("TRANSCRIBE_BACKEND", "parakeet")
+    monkeypatch.setenv("TRANSCRIBE_LANGUAGE", "hi")   # parakeet has no Hindi: straight to whisper
+    tb.transcribe_media("x.mp4")
+    assert seen["lang"] == "hi"
+    assert app_module.SUBTITLE_LANGUAGE_ENV["hinglish"] == {"TRANSCRIBE_LANGUAGE": "hi", "HINGLISH": "1"}

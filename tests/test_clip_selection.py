@@ -303,3 +303,11 @@ class TestShortlistTarget:
     def test_degenerate_input_does_not_crash(self):
         assert shortlist_target(None) == 3
         assert shortlist_target("nonsense") == 3
+
+
+def test_pinned_clip_count_grows_the_shortlist(monkeypatch):
+    monkeypatch.setenv("CLIP_TARGET_MAX", "15")
+    assert shortlist_target(60 * 60) == 15   # auto caps at 10
+    assert shortlist_target(60) == 15        # capped at 15, windows limit it anyway
+    monkeypatch.setenv("CLIP_TARGET_MAX", "2")
+    assert shortlist_target(60 * 60) == 10   # never shrinks the auto count

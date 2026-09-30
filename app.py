@@ -3161,6 +3161,13 @@ def _take_pending_upload(upload_id, user_id):
     return slot
 
 
+SUBTITLE_LANGUAGE_ENV = {
+    "hinglish": {"TRANSCRIBE_LANGUAGE": "hi", "HINGLISH": "1"},  # Hindi in Roman letters
+    "hindi": {"TRANSCRIBE_LANGUAGE": "hi", "HINGLISH": "0"},     # Devanagari
+    "english": {"TRANSCRIBE_LANGUAGE": "en"},
+}
+
+
 def layout_env(requested):
     """Env overrides for the layouts this job allows. Unknown names are ignored
     rather than rejected: a newer dashboard must not break an older API.
@@ -3210,6 +3217,7 @@ async def process_endpoint(
     captions: Optional[str] = Form(None),
     upload_id: Optional[str] = Form(None),
     max_minutes: Optional[str] = Form(None),
+    subtitle_language: Optional[str] = Form(None),
 ):
     api_key = await resolve_gemini(request)
     if not api_key and not (llm_backend.active() and not BILLING_ENABLED):
@@ -3245,6 +3253,7 @@ async def process_endpoint(
         captions = body.get("captions")
         upload_id = body.get("upload_id")
         max_minutes = body.get("max_minutes")
+        subtitle_language = body.get("subtitle_language")
 
     # Normalize output format (auto = keep pipeline default).
     if output_format not in ("vertical", "horizontal", "square"):
@@ -3388,6 +3397,9 @@ async def process_endpoint(
         env["CLIP_MIN_SECONDS"] = str(min_secs)
     if max_secs is not None:
         env["CLIP_MAX_SECONDS"] = str(max_secs)
+    # Subtitle language: whisper detects code-mixed Hindi as English and
+    # translates it, so Hinglish/Hindi pin the language. Absent = detect.
+    env.update(SUBTITLE_LANGUAGE_ENV.get(str(subtitle_language or "").lower(), {}))
     if n_clips is not None or min_secs is not None or max_secs is not None:
         print(f"[gen-controls] job={job_id} clips={n_clips} band={min_secs}-{max_secs}")
 

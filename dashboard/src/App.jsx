@@ -39,6 +39,7 @@ import { track } from './lib/analytics';
 // This is better than plain Base64 but still client-side.
 const SECRET_KEY = import.meta.env.VITE_ENCRYPTION_KEY || "OpenShorts-Static-Salt-Change-Me";
 const ENCRYPTION_PREFIX = "ENC:";
+const UPLOAD_CHUNK = 25 * 1024 * 1024; // under Cloudflare's 100 MB request cap
 
 const encrypt = (text) => {
   if (!text) return '';
@@ -977,7 +978,9 @@ function App() {
     }
   };
 
+  const lastSubmitRef = useRef(null);
   const handleProcess = async (data, forceLowQuality = false) => {
+    lastSubmitRef.current = [data, forceLowQuality];
     // Hosted: must be signed in AND on an active plan/trial. Self-host: BYOK keys.
     if (billingEnabled) {
       // The billing gate below is unchanged: signed in, then entitled, then the
@@ -998,6 +1001,7 @@ function App() {
     setLogs(["Starting process..."]);
     setLogTimes([Date.now() / 1000]);
     setResults(null);
+    setJobId(null);
     // Studio handovers have no local media object; the preview switches to the
     // backend-served source once the job id is known.
     setProcessingMedia(data.type === 'thumbnail_session' ? null : data);
@@ -1051,7 +1055,24 @@ function App() {
         });
       } else {
         const formData = new FormData();
-        formData.append('file', data.payload);
+        const file = data.payload;
+        // A Cloudflare tunnel (Kaggle, self-host behind one) refuses any body
+        // over 100 MB, so a big file goes up in pieces and the job takes its id.
+        if (file.size > UPLOAD_CHUNK) {
+          const slot = await apiJson('/api/uploads', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename: file.name }),
+          });
+          for (let off = 0; off < file.size; off += UPLOAD_CHUNK) {
+            const end = Math.min(off + UPLOAD_CHUNK, file.size);
+            await apiJson(`/api/uploads/${slot.upload_id}?offset=${off}&final=${end === file.size ? 1 : 0}`,
+              { method: 'PUT', body: file.slice(off, end) });
+            setLogs(l => [...l, `⬆️ Uploaded ${Math.round(end / 1048576)} / ${Math.round(file.size / 1048576)} MB`]);
+          }
+          formData.append('upload_id', slot.upload_id);
+        } else {
+          formData.append('file', file);
+        }
         formData.append('acknowledged', data.acknowledged ? 'true' : 'false');
         formData.append('output_format', data.outputFormat || 'auto');
         for (const [k, v] of Object.entries(advanced)) {
@@ -2000,6 +2021,15 @@ function App() {
                         title="Stop this job"
                       >
                         <Square size={11} /> Stop
+                      </button>
+                    )}
+                    {status === 'error' && !jobId && lastSubmitRef.current && (
+                      <button
+                        onClick={() => handleProcess(...lastSubmitRef.current)}
+                        className="btn-quiet px-2.5 py-1 text-xs text-brass"
+                        title="Submit this video again"
+                      >
+                        <RotateCcw size={11} /> Retry
                       </button>
                     )}
                     {status === 'error' && !billingEnabled && jobId && (

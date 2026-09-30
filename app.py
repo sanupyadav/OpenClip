@@ -3078,16 +3078,26 @@ async def create_upload(request: Request):
 
 
 @app.put("/api/uploads/{upload_id}")
-async def put_upload(upload_id: str, request: Request):
+async def put_upload(upload_id: str, request: Request, offset: Optional[int] = None, final: bool = True):
     """Receive the raw video body for a reserved slot. Streams to disk, capped
-    at MAX_FILE_SIZE_MB; a second PUT replaces the first."""
+    at MAX_FILE_SIZE_MB; a second PUT replaces the first.
+
+    Chunked: ``?offset=N&final=0`` appends a piece at byte N (must equal what
+    is already on disk), and the last piece goes with ``final=1``. The
+    dashboard needs it behind a Cloudflare tunnel, which refuses any request
+    body over 100 MB, so a bigger upload never reached the server at all."""
     slot = pending_uploads.get(upload_id)
     if not slot or time.time() - slot["created"] > UPLOAD_TTL_SECONDS:
         pending_uploads.pop(upload_id, None)
         raise HTTPException(status_code=404, detail="Unknown or expired upload_id")
     limit_bytes = MAX_FILE_SIZE_MB * 1024 * 1024
     size = 0
-    with open(slot["path"], "wb") as out:
+    if offset:
+        size = os.path.getsize(slot["path"]) if os.path.exists(slot["path"]) else 0
+        if offset != size:
+            raise HTTPException(status_code=409, detail=f"Offset {offset} does not match the {size} bytes received")
+    slot["complete"] = False
+    with open(slot["path"], "ab" if offset else "wb") as out:
         async for chunk in request.stream():
             size += len(chunk)
             if size > limit_bytes:
@@ -3095,10 +3105,13 @@ async def put_upload(upload_id: str, request: Request):
                 os.remove(slot["path"])
                 raise HTTPException(status_code=413, detail=f"File too large. Max size {MAX_FILE_SIZE_MB}MB")
             out.write(chunk)
+    slot["bytes"] = size
+    if not final:
+        return {"upload_id": upload_id, "bytes": size}
     if size == 0:
         os.remove(slot["path"])
         raise HTTPException(status_code=400, detail="Empty body")
-    slot.update({"bytes": size, "complete": True})
+    slot["complete"] = True
     duration = await asyncio.get_event_loop().run_in_executor(None, _media_duration_seconds, slot["path"])
     if duration <= 0:
         os.remove(slot["path"])

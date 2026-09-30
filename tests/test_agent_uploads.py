@@ -169,3 +169,19 @@ def test_auto_hook_false_opts_out(dirs, monkeypatch):
     monkeypatch.setattr(app_module.job_queue, "put", fake_put)
     payload = _tool_payload(_mcp("process_video", {"upload_id": slot["upload_id"], "confirm_rights": True, "auto_hook": False}))
     assert "AUTO_HOOK" not in app_module.jobs[payload["job_id"]]["env"]
+
+
+def test_chunked_put_appends_and_completes_on_final(dirs):
+    slot = _tool_payload(_mcp("create_upload", {"filename": "big.mkv"}))
+    url = f"/api/uploads/{slot['upload_id']}"
+
+    async def _put(qs, body):
+        async with _client() as c:
+            return await c.put(url + qs, content=body)
+    assert asyncio.run(_put("?offset=0&final=0", b"a" * 10)).json()["bytes"] == 10
+    assert not app_module.pending_uploads[slot["upload_id"]]["complete"]
+    assert asyncio.run(_put("?offset=5&final=0", b"b")).status_code == 409  # gap/overlap refused
+    resp = asyncio.run(_put("?offset=10&final=1", b"c" * 7))
+    assert resp.status_code == 200 and resp.json()["bytes"] == 17
+    s = app_module.pending_uploads[slot["upload_id"]]
+    assert s["complete"] and open(s["path"], "rb").read() == b"a" * 10 + b"c" * 7

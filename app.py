@@ -1654,6 +1654,8 @@ async def run_job_wrapper(job_id):
         await _autopilot_job_finished(job_id, job)
         # Self-host: Settings → Telegram → Auto-send new clips.
         await _telegram_auto_send(job_id, job)
+        # Self-host: Settings → YouTube → Auto-schedule.
+        await _youtube_auto_schedule(job_id, job)
         # Fire the caller's webhook (after archive, so durable links exist).
         await _notify_job_webhook(job_id)
         # Operational alerting for managed jobs (proxy out of credits / failures).
@@ -2172,6 +2174,7 @@ async def lifespan(app: FastAPI):
     # Start worker and cleanup
     worker_task = asyncio.create_task(process_queue())
     cleanup_task = asyncio.create_task(cleanup_jobs())
+    _yt_start_worker()  # YouTube uploads queued before a restart
     if BILLING_ENABLED:
         await cloud.setup_async(app, keep_reservation_ids=_resumed_reservation_ids)
         # Account erasure lives in cloud/, which can't import app.py; hand it the
@@ -5641,7 +5644,10 @@ def _yt_status(cfg=None):
     cfg = _yt.load(_YT_FILE) if cfg is None else cfg
     return {"configured": bool(cfg.get("client_id") and cfg.get("client_secret")),
             "clientId": cfg.get("client_id", ""), "hasSecret": bool(cfg.get("client_secret")),
-            "connected": bool(cfg.get("refresh_token")), "channel": cfg.get("channel")}
+            "connected": bool(cfg.get("refresh_token")), "channel": cfg.get("channel"),
+            "canDelete": _yt.DELETE_SCOPE in (cfg.get("scope") or ""),
+            "autoSchedule": bool(cfg.get("auto_schedule")),
+            "intervalHours": float(cfg.get("interval_hours") or 3)}
 
 
 @app.get("/api/youtube/status")
@@ -5725,8 +5731,10 @@ async def youtube_callback(state: str = "", code: str = "", error: str = ""):
         return _yt_callback_page(False, "Google sent no refresh token. Remove openClip from "
                                         "myaccount.google.com/permissions and connect again.")
     cfg["refresh_token"] = tokens["refresh_token"]
+    cfg["scope"] = tokens.get("scope", "")
     cfg["channel"] = await asyncio.to_thread(_yt.channel_title, tokens.get("access_token", ""))
     _yt.save(_YT_FILE, cfg)
+    _yt_start_worker()  # clips queued while disconnected
     return _yt_callback_page(True, f"Connected{' to ' + cfg['channel'] if cfg['channel'] else ''}. "
                                    "You can close this window.")
 
@@ -5813,8 +5821,9 @@ async def youtube_upload(req: YouTubeUploadRequest, request: Request):
         video_id = await asyncio.to_thread(_yt_upload_blocking, cfg, file_path, meta)
     except _yt.YouTubeError as e:
         raise HTTPException(status_code=400, detail=f"YouTube: {e}")
-    mark = {"videoId": video_id, "url": f"https://youtube.com/shorts/{video_id}",
-            "privacy": meta["status"]["privacyStatus"], "at": time.time()}
+    mark = {"status": "uploaded", "videoId": video_id, "url": f"https://youtube.com/shorts/{video_id}",
+            "privacy": meta["status"]["privacyStatus"], "title": meta["snippet"]["title"],
+            "publishAt": req.publish_at, "at": time.time()}
     marks = _yt_marks(req.job_id)
     marks[str(req.clip_index)] = mark
     try:
@@ -5822,6 +5831,188 @@ async def youtube_upload(req: YouTubeUploadRequest, request: Request):
     except OSError as e:
         print(f"⚠️ Could not record the YouTube upload for {req.job_id}: {e}")
     return mark
+
+
+# --- Auto-schedule (Settings → YouTube → Auto-schedule). A finished job's
+# clips are queued as marks with a slot `interval_hours` apart, and one worker
+# uploads them oldest slot first as scheduled private videos. Uploaded right
+# away, not at the slot, so they still publish after the server (a Kaggle
+# session) is gone. The free quota is ~6 uploads a day: a quota error waits an
+# hour and retries, and a slot that passed meanwhile moves forward.
+_yt_worker = None
+_YT_UPLOADED = ("sent", "queued", "uploading", "uploaded")  # "sent": marks older than status
+
+
+def _yt_iso(ts: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
+
+
+def _yt_set_mark(job_dir: str, clip_index, mark):
+    path = os.path.join(job_dir, _YT_MARKS)
+    marks = _yt.load(path)
+    if mark is None:
+        marks.pop(str(clip_index), None)
+    else:
+        marks[str(clip_index)] = mark
+    _yt.save(path, marks)
+
+
+def _yt_queue_unscheduled(job_id, cfg) -> int:
+    job_dir = _post_job_dir(job_id)
+    todo = _unsent_clips(job_id, _yt_marks(job_id), _YT_UPLOADED)
+    step = float(cfg.get("interval_hours") or 3) * 3600
+    slot = max(time.time() + 900, float(cfg.get("last_slot") or 0) + step)
+    for idx, path, title, description in todo:
+        _yt_set_mark(job_dir, idx, {"status": "queued", "file": os.path.basename(path), "title": title,
+                                    "description": description, "slot": slot, "publishAt": _yt_iso(slot),
+                                    "at": time.time()})
+        cfg["last_slot"] = slot
+        slot += step
+    if todo:
+        _yt.save(_YT_FILE, cfg)
+        _yt_start_worker()
+    return len(todo)
+
+
+def _yt_start_worker():
+    global _yt_worker
+    if not BILLING_ENABLED and (_yt_worker is None or _yt_worker.done()):
+        _yt_worker = asyncio.create_task(_yt_upload_queue())
+
+
+async def _yt_upload_queue():
+    while not _draining:
+        cfg = _yt.load(_YT_FILE)
+        if not cfg.get("refresh_token"):
+            return  # restarted by the next connect
+        queued = []
+        for name in os.listdir(OUTPUT_DIR):
+            job_dir = os.path.join(OUTPUT_DIR, name)
+            if os.path.isdir(job_dir) and not name.startswith("."):
+                # ponytail: "uploading" here was cut by a restart and goes again,
+                # a duplicate if Google had already taken it.
+                queued += [(m.get("slot") or 0, job_dir, idx, m)
+                           for idx, m in _yt.load(os.path.join(job_dir, _YT_MARKS)).items()
+                           if m.get("status") in ("queued", "uploading")]
+        if not queued:
+            return
+        _, job_dir, idx, m = min(queued, key=lambda q: q[0])
+        slot = max(m["slot"], time.time() + 900)  # YouTube refuses a publishAt in the past
+        m = {k: v for k, v in m.items() if k != "error"}
+        _yt_set_mark(job_dir, idx, {**m, "status": "uploading"})
+        try:
+            meta = _yt.metadata(m.get("title"), m.get("description"), [], "private", _yt_iso(slot))
+            video_id = await asyncio.to_thread(_yt_upload_blocking, cfg, os.path.join(job_dir, m["file"]), meta)
+        except Exception as e:
+            quota = "quota" in str(e).lower()
+            _yt_set_mark(job_dir, idx, {**m, "status": "queued" if quota else "failed",
+                                        "error": "Daily YouTube quota used up, retrying every hour" if quota
+                                        else str(e)[:300]})
+            print(f"⚠️ YouTube scheduled upload ({job_dir}, clip {idx}): {e}")
+            if quota:
+                await asyncio.sleep(3600)
+            continue
+        _yt_set_mark(job_dir, idx, {**m, "status": "uploaded", "videoId": video_id,
+                                    "url": f"https://youtube.com/shorts/{video_id}", "privacy": "private",
+                                    "slot": slot, "publishAt": _yt_iso(slot), "at": time.time()})
+
+
+async def _youtube_auto_schedule(job_id, job):
+    """Never raises into the job's bookkeeping."""
+    if BILLING_ENABLED or (job or {}).get("status") != "completed":
+        return
+    try:
+        cfg = _yt.load(_YT_FILE)
+        if cfg.get("auto_schedule") and cfg.get("refresh_token"):
+            n = _yt_queue_unscheduled(job_id, cfg)
+            if n:
+                print(f"📅 YouTube auto-schedule: {n} clip(s) of {job_id} queued")
+    except Exception as e:
+        print(f"⚠️ YouTube auto-schedule failed for {job_id}: {e}")
+
+
+class YouTubeScheduleRequest(BaseModel):
+    auto_schedule: Optional[bool] = None
+    interval_hours: Optional[float] = None
+
+
+@app.put("/api/youtube/schedule")
+async def youtube_schedule(req: YouTubeScheduleRequest):
+    _yt_self_host()
+    cfg = _yt.load(_YT_FILE)
+    if req.interval_hours is not None:
+        if not 0.25 <= req.interval_hours <= 168:
+            raise HTTPException(status_code=400, detail="The gap must be between 15 minutes and 7 days")
+        cfg["interval_hours"] = req.interval_hours
+    if req.auto_schedule is not None:
+        cfg["auto_schedule"] = req.auto_schedule
+    _yt.save(_YT_FILE, cfg)
+    return _yt_status(cfg)
+
+
+@app.get("/api/youtube/all")
+async def youtube_all_uploads():
+    """The YouTube tab: every upload and queued clip of every job, newest first."""
+    _yt_self_host()
+    out = []
+    for name in os.listdir(OUTPUT_DIR):
+        job_dir = os.path.join(OUTPUT_DIR, name)
+        if os.path.isdir(job_dir) and not name.startswith("."):
+            out += [{**m, "status": m.get("status") or "uploaded", "job_id": name, "clip_index": int(idx)}
+                    for idx, m in _yt.load(os.path.join(job_dir, _YT_MARKS)).items()]
+    out.sort(key=lambda u: u.get("slot") or u.get("at") or 0, reverse=True)
+    return {"uploads": out}
+
+
+@app.post("/api/youtube/check")
+async def youtube_check_uploads():
+    """The YouTube tab's "check on YouTube": each uploaded video's live state
+    (scheduled, public, made private by Google, deleted in Studio)."""
+    _yt_self_host()
+    cfg = _yt.load(_YT_FILE)
+    if not cfg.get("refresh_token"):
+        raise HTTPException(status_code=400, detail="Connect YouTube in Settings first")
+    rows = [u for u in (await youtube_all_uploads())["uploads"] if u.get("videoId")]
+    try:
+        token = await asyncio.to_thread(_yt.access_token, cfg["client_id"], cfg["client_secret"], cfg["refresh_token"])
+        live = await asyncio.to_thread(_yt.video_statuses, token, [u["videoId"] for u in rows])
+    except _yt.YouTubeError as e:
+        raise HTTPException(status_code=409, detail=f"YouTube: {e}")
+    for u in rows:
+        job_dir = os.path.join(OUTPUT_DIR, u["job_id"])
+        mark = _yt.load(os.path.join(job_dir, _YT_MARKS)).get(str(u["clip_index"]))
+        if not mark:
+            continue
+        v = live.get(u["videoId"])
+        mark.update(checkedAt=time.time(), live="deleted" if not v else
+                    "scheduled" if v["publishAt"] and v["privacy"] == "private" else v["privacy"])
+        if v:
+            mark.update(privacy=v["privacy"], publishAt=v["publishAt"] or mark.get("publishAt"))
+        _yt_set_mark(job_dir, u["clip_index"], mark)
+    return await youtube_all_uploads()
+
+
+@app.delete("/api/youtube/uploads/{job_id}/{clip_index}")
+async def youtube_delete_upload(job_id: str, clip_index: int):
+    """Delete the video from the channel (or cancel a queued one) and drop the mark."""
+    _yt_self_host()
+    job_dir = _post_job_dir(job_id)
+    mark = _yt_marks(job_id).get(str(clip_index))
+    if not mark:
+        raise HTTPException(status_code=404, detail="This clip is not on YouTube")
+    if mark.get("status") == "uploading":
+        raise HTTPException(status_code=409, detail="It is uploading right now; delete it once it is done")
+    if mark.get("videoId"):
+        cfg = _yt.load(_YT_FILE)
+        if not cfg.get("refresh_token"):
+            raise HTTPException(status_code=400, detail="Connect YouTube in Settings first")
+        try:
+            token = await asyncio.to_thread(_yt.access_token, cfg["client_id"], cfg["client_secret"], cfg["refresh_token"])
+            await asyncio.to_thread(_yt.delete_video, token, mark["videoId"])
+        except _yt.YouTubeError as e:
+            raise HTTPException(status_code=409, detail=f"YouTube: {e}")
+    _yt_set_mark(job_dir, clip_index, None)
+    return {"deleted": True}
 
 
 # --- Send to Telegram (self-host, the user's own bot). See telegram_direct.py.
@@ -5954,22 +6145,21 @@ def _tg_queue(cfg, job_dir, clip_index, file_path, title, description):
     return mark
 
 
-def _tg_unsent_clips(job_id):
+def _unsent_clips(job_id, marks, done=("sent", "queued", "sending")):
     """(index, file path, title, description) of every clip of a finished job
-    that is not sent and not on its way. Read from the metadata on disk."""
+    whose mark is not in `done`. Read from the metadata on disk."""
     job_dir = _post_job_dir(job_id)
     meta = glob.glob(os.path.join(job_dir, "*_metadata.json"))
     if not meta or _local_job_running(job_id):
         return []
     clips = (_yt.load(meta[0]) or {}).get("shorts") or []
-    marks = tg_marks_at(os.path.join(job_dir, _TG_MARKS))
     base = os.path.basename(meta[0]).replace("_metadata.json", "")
     out = []
     for i, c in enumerate(clips):
         if c.get("deleted"):
             continue
         status = (marks.get(str(i)) or {}).get("status") or ("sent" if str(i) in marks else "")
-        if status in ("sent", "queued", "sending"):
+        if status in done:
             continue
         name = os.path.basename((c.get("video_url") or "").split("/")[-1]) or _canonical_clip_file(job_dir, base, i)
         path = os.path.join(job_dir, name or "")
@@ -5984,7 +6174,7 @@ def _tg_queue_unsent(job_id, cfg=None) -> int:
     if not (cfg.get("token") and cfg.get("chat_id")):
         return 0
     job_dir = _post_job_dir(job_id)
-    todo = _tg_unsent_clips(job_id)
+    todo = _unsent_clips(job_id, tg_marks_at(os.path.join(job_dir, _TG_MARKS)))
     for idx, path, title, description in todo:
         _tg_queue(cfg, job_dir, idx, path, title, description)
     return len(todo)

@@ -3,6 +3,7 @@ import { Square, Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Chec
 import KeyInput from './components/KeyInput';
 import LocalLlmCard, { LlmGatewayForm } from './components/LocalLlmCard';
 import YouTubeDirectCard from './components/YouTubeDirectCard';
+import YouTubeUploadsTab from './components/YouTubeUploadsTab';
 import TelegramCard from './components/TelegramCard';
 import QueueTab from './components/QueueTab';
 import ElapsedTimer from './components/ElapsedTimer';
@@ -1200,6 +1201,7 @@ function App() {
     { id: 'thumbnails', ord: '06', icon: Image, label: 'YouTube Studio', short: 'studio', primary: true },
     ...(billingEnabled && isSignedIn ? [{ id: 'history', ord: '07', icon: History, label: 'History', short: 'history' }] : []),
     ...(!billingEnabled ? [{ id: 'queue', ord: '07', icon: Activity, label: 'Queue', short: 'queue' }] : []),
+    ...(!billingEnabled ? [{ id: 'yt-uploads', ord: '07', icon: Youtube, label: 'YouTube Uploads', short: 'youtube' }] : []),
     { id: 'settings', ord: '08', icon: Settings, label: 'Settings', short: 'settings' },
   ];
   const activeNav = navItems.find((n) => n.id === activeTab);
@@ -1918,6 +1920,14 @@ function App() {
             <div className="h-full overflow-y-auto custom-scrollbar animate-fade">
               <div className="max-w-4xl mx-auto p-4 sm:p-6 md:p-8">
                 <QueueTab onOpenJob={openRunningJob} />
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'yt-uploads' && (
+            <div className="h-full overflow-y-auto custom-scrollbar animate-fade">
+              <div className="max-w-4xl mx-auto p-4 sm:p-6 md:p-8">
+                <YouTubeUploadsTab />
               </div>
             </div>
           )}

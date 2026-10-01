@@ -5,6 +5,11 @@ import { apiJson } from '../lib/api';
 
 // The "already on YouTube" mark, linking to the video.
 export function YouTubeMark({ mark, className = '' }) {
+    if (mark?.status === 'queued' || mark?.status === 'uploading') {
+        return <span className={`badge-warn inline-flex items-center gap-1 ${className}`} title={mark.error || 'Waiting to upload'}>
+            <Youtube size={11} /> {mark.status}
+        </span>;
+    }
     if (!mark?.url) return null;
     return (
         <a href={mark.url} target="_blank" rel="noopener noreferrer" title={`On YouTube (${mark.privacy})`}

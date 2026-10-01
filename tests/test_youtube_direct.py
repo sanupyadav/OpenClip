@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 
 import httpx
 import pytest
@@ -113,3 +114,69 @@ def test_upload_from_the_gallery_records_the_mark(ytapp, monkeypatch):
     assert gallery["youtube"]["videoId"] == "abc123"
     with pytest.raises(app.HTTPException):
         asyncio.run(app.youtube_uploads("../etc"))
+
+
+def test_auto_schedule_spaces_the_clips_and_the_tab_deletes_them(ytapp, monkeypatch):
+    monkeypatch.setattr(app, "OUTPUT_DIR", str(ytapp))
+    monkeypatch.setattr(app, "_local_job_running", lambda name: False)
+    job = ytapp / "jobS"
+    job.mkdir()
+    for i in range(3):
+        (job / f"c{i}.mp4").write_bytes(b"v")
+    (job / "s_metadata.json").write_text(json.dumps({"shorts": [
+        {"video_url": f"/videos/jobS/c{i}.mp4", "video_title_for_youtube_short": f"T{i}"} for i in range(3)]}))
+    app._yt_set_mark(str(job), 1, {"videoId": "old", "url": "u"})  # uploaded by hand, before marks had a status
+    yt.save(app._YT_FILE, {"client_id": "i", "client_secret": "s", "refresh_token": "r",
+                           "auto_schedule": True, "interval_hours": 3})
+    uploads, quota = [], [True]
+
+    def fake_upload(cfg, path, meta):
+        if quota.pop() if quota else False:
+            raise yt.YouTubeError("The request cannot be completed because you have exceeded your quota.")
+        uploads.append((os.path.basename(path), meta["status"]["publishAt"]))
+        return f"v{len(uploads)}"
+    monkeypatch.setattr(app, "_yt_upload_blocking", fake_upload)
+    real_sleep = asyncio.sleep
+
+    async def no_wait(s):
+        await real_sleep(0)
+    monkeypatch.setattr(app.asyncio, "sleep", no_wait)
+
+    async def finish():
+        await app._youtube_auto_schedule("jobS", {"status": "completed"})
+        await app._yt_worker
+    asyncio.run(finish())
+    assert [u[0] for u in uploads] == ["c0.mp4", "c2.mp4"]  # the quota error retried; clip 1 was already up
+    rows = {r["clip_index"]: r for r in asyncio.run(app.youtube_all_uploads())["uploads"]}
+    assert rows[0]["status"] == rows[2]["status"] == "uploaded" and rows[1]["status"] == "uploaded"
+    assert abs(rows[2]["slot"] - rows[0]["slot"] - 3 * 3600) < 5 and "error" not in rows[0]
+
+    deleted = []
+    monkeypatch.setattr(app._yt, "access_token", lambda *a: "tok")
+    monkeypatch.setattr(app._yt, "delete_video", lambda tok, vid: deleted.append(vid))
+    assert asyncio.run(app.youtube_delete_upload("jobS", 0))["deleted"]
+    assert deleted == ["v1"] and "0" not in asyncio.run(app.youtube_uploads("jobS"))["uploads"]
+
+
+def test_delete_explains_an_old_login_and_treats_gone_as_done(monkeypatch):
+    real = httpx.Client
+    answers = [httpx.Response(404), httpx.Response(403, json={"error": {"message": "Request had insufficient authentication scopes."}})]
+    monkeypatch.setattr(yt.httpx, "Client", lambda **kw: real(transport=httpx.MockTransport(lambda r: answers.pop()), **kw))
+    with pytest.raises(yt.YouTubeError, match="Reconnect"):
+        yt.delete_video("t", "v")
+    yt.delete_video("t", "v")  # 404: already deleted
+
+
+def test_check_reads_the_live_state_of_each_video(ytapp, monkeypatch):
+    monkeypatch.setattr(app, "OUTPUT_DIR", str(ytapp))
+    job = ytapp / "jobC"
+    job.mkdir()
+    app._yt_set_mark(str(job), 0, {"status": "uploaded", "videoId": "a", "publishAt": "2026-10-02T10:00:00Z"})
+    app._yt_set_mark(str(job), 1, {"status": "uploaded", "videoId": "b"})
+    app._yt_set_mark(str(job), 2, {"status": "queued", "slot": 1})
+    yt.save(app._YT_FILE, {"client_id": "i", "client_secret": "s", "refresh_token": "r"})
+    monkeypatch.setattr(app._yt, "access_token", lambda *a: "tok")
+    monkeypatch.setattr(app._yt, "video_statuses", lambda tok, ids: {
+        "a": {"privacy": "private", "publishAt": "2026-10-02T10:00:00Z"}})
+    rows = {r["clip_index"]: r for r in asyncio.run(app.youtube_check_uploads())["uploads"]}
+    assert rows[0]["live"] == "scheduled" and rows[1]["live"] == "deleted" and "live" not in rows[2]

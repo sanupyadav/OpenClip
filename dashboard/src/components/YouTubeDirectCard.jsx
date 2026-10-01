@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Youtube, Check, Copy, Loader2, AlertTriangle } from 'lucide-react';
 import { apiJson } from '../lib/api';
+import Switch from './Switch';
 
 const CALLBACK = '/api/youtube/callback';
 
@@ -48,6 +49,14 @@ export default function YouTubeDirectCard() {
             body: JSON.stringify({ redirect_uri: redirectUri }),
         });
         if (!window.open(url, 'youtube-auth', 'width=520,height=680')) window.location.href = url;
+    });
+
+    const [hours, setHours] = useState('');
+    const setSchedule = (body) => run(async () => {
+        setStatus(await apiJson('/api/youtube/schedule', {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+        }));
+        setHours('');
     });
 
     const disconnect = () => run(async () => {
@@ -103,10 +112,33 @@ export default function YouTubeDirectCard() {
                             {busy ? <Loader2 size={14} className="animate-spin" /> : <Youtube size={14} />} Connect YouTube
                         </button>
                     )}
+                    {status.connected && !status.canDelete && (
+                        <button onClick={connect} disabled={busy} className="btn-quiet px-4 py-2 text-sm"
+                            title="The current login can upload but not delete videos">
+                            <Youtube size={14} /> Reconnect to allow deleting
+                        </button>
+                    )}
                     {status.connected && (
                         <button onClick={disconnect} disabled={busy} className="btn-ghost px-4 py-2 text-sm">Disconnect</button>
                     )}
                 </div>
+                {status.connected && (
+                    <div className="mt-3 pt-3 border-t border-rule space-y-2">
+                        <div className="flex items-center justify-between gap-3">
+                            <div>
+                                <p className="text-sm text-ink">Auto-schedule new clips</p>
+                                <p className="text-xs text-muted">Every job that finishes uploads its clips as scheduled videos, one every {status.intervalHours} h.</p>
+                            </div>
+                            <Switch checked={!!status.autoSchedule} disabled={busy} onChange={(on) => setSchedule({ auto_schedule: on })} label="Auto-schedule new clips" />
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <input type="number" min="0.25" max="168" step="0.25" className="input-field w-28"
+                                placeholder={`${status.intervalHours} h`} value={hours} onChange={(e) => setHours(e.target.value)} />
+                            <button onClick={() => setSchedule({ interval_hours: Number(hours) })} disabled={busy || !hours}
+                                className="btn-quiet px-3 py-2 text-sm">Set hours between shorts</button>
+                        </div>
+                    </div>
+                )}
                 {error && (
                     <p className="text-sm text-warn flex items-start gap-1.5 break-words">
                         <AlertTriangle size={14} className="shrink-0 mt-0.5" /> {error}

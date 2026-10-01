@@ -21,9 +21,13 @@ TOKEN_URL = "https://oauth2.googleapis.com/token"
 REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 UPLOAD_URL = "https://www.googleapis.com/upload/youtube/v3/videos"
 CHANNELS_URL = "https://www.googleapis.com/youtube/v3/channels"
-# upload to post, readonly only to show which channel is connected.
+VIDEOS_URL = "https://www.googleapis.com/youtube/v3/videos"
+# upload to post, readonly to show which channel is connected, force-ssl to
+# delete a video (logins made before it was added cannot delete).
 SCOPES = ("https://www.googleapis.com/auth/youtube.upload "
-          "https://www.googleapis.com/auth/youtube.readonly")
+          "https://www.googleapis.com/auth/youtube.readonly "
+          "https://www.googleapis.com/auth/youtube.force-ssl")
+DELETE_SCOPE = "youtube.force-ssl"
 PRIVACY = ("private", "unlisted", "public")
 CALLBACK_PATH = "/api/youtube/callback"
 
@@ -149,3 +153,30 @@ def upload(token: str, file_path: str, meta: dict) -> str:
     if put.status_code not in (200, 201):
         raise YouTubeError(_google_error(put))
     return put.json()["id"]
+
+
+def delete_video(token: str, video_id: str):
+    with httpx.Client(timeout=30) as c:
+        r = c.delete(VIDEOS_URL, params={"id": video_id}, headers={"Authorization": f"Bearer {token}"})
+    if r.status_code in (204, 404):  # 404: already deleted in YouTube Studio
+        return
+    msg = _google_error(r)
+    if "insufficient" in msg.lower():
+        msg = "this login can only upload. Reconnect YouTube in Settings to allow deleting."
+    raise YouTubeError(msg)
+
+
+def video_statuses(token: str, video_ids) -> dict:
+    """{video id: {"privacy", "publishAt"}} as YouTube has them now (1 quota
+    unit per 50 ids). An id missing from the answer was deleted."""
+    out, ids = {}, list(video_ids)
+    with httpx.Client(timeout=30) as c:
+        for i in range(0, len(ids), 50):
+            r = c.get(VIDEOS_URL, params={"part": "status", "id": ",".join(ids[i:i + 50])},
+                      headers={"Authorization": f"Bearer {token}"})
+            if r.status_code != 200:
+                raise YouTubeError(_google_error(r))
+            for v in r.json().get("items") or []:
+                s = v.get("status") or {}
+                out[v["id"]] = {"privacy": s.get("privacyStatus"), "publishAt": s.get("publishAt")}
+    return out

@@ -3,10 +3,12 @@ import os
 import uuid
 import json
 from concurrent.futures import ThreadPoolExecutor
+from typing import List
 
 from google import genai
 from google.genai import types
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from pydantic import BaseModel
 
 # Text/analysis model (titles, concepts, description). Deliberately NOT tied to
 # GEMINI_MODEL: the pipeline runs flash-lite for a closed-choice layout pick,
@@ -30,6 +32,48 @@ THUMB_W, THUMB_H = 1280, 720
 THUMB_MAX_BYTES = 2 * 1024 * 1024  # YouTube's upload limit
 THUMB_FONT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts", "Anton-Regular.ttf")
 TEXT_POSITIONS = ("left", "right", "top", "bottom")
+
+# Without a Gemini key the text calls go to the local LLM (LLM_BASE_URL, e.g.
+# Ollama on Kaggle): text only, no frames, and a transcript cut to fit a
+# 4-8k context. Thumbnails then come from the user's own frame + PIL text,
+# since a text model cannot draw.
+LOCAL_TRANSCRIPT_CHARS = 6000
+
+
+class _Brainstorm(BaseModel):
+    transcript_summary: str = ""
+    candidates: List[str] = []
+
+
+class _Picked(BaseModel):
+    titles: List[str] = []
+    thumbnail_texts: List[str] = []
+    recommended: List[dict] = []
+
+
+class _Refined(BaseModel):
+    titles: List[str] = []
+    thumbnail_texts: List[str] = []
+    language: str = ""
+
+
+class _Description(BaseModel):
+    description: str = ""
+
+
+def _ask_json(api_key, prompt, schema, frames=()):
+    """One JSON answer: Gemini when there is a key, else the local LLM.
+    Raises ValueError / RuntimeError on an unusable answer."""
+    if api_key:
+        response = genai.Client(api_key=api_key).models.generate_content(
+            model=TEXT_MODEL, contents=list(frames) + [prompt],
+            config=types.GenerateContentConfig(response_mime_type="application/json"))
+        try:
+            return _parse_json(response.text)
+        except (json.JSONDecodeError, AttributeError) as e:
+            raise ValueError(f"unparseable answer: {getattr(response, 'text', '')[:300]}") from e
+    import llm_backend
+    return llm_backend.generate_json(prompt, schema)[0]
 
 
 def _parse_json(text):
@@ -74,13 +118,12 @@ def analyze_video_for_titles(api_key, video_path, transcript=None):
     else:
         print("🎬 [Thumbnail] Using pre-computed transcript (Whisper already done)...")
 
-    client = genai.Client(api_key=api_key)
-    frames = _frame_parts(video_path)
+    frames = _frame_parts(video_path) if api_key else []
     language = transcript.get("language", "en")
     segments = transcript.get("segments", [])
     video_duration = segments[-1]["end"] if segments else 0
     # Enough transcript for a title; a 3-hour podcast does not need all of it.
-    transcript_text = transcript.get("text", "")[:60000]
+    transcript_text = transcript.get("text", "")[:60000 if api_key else LOCAL_TRANSCRIPT_CHARS]
 
     brainstorm_prompt = f"""You are a YouTube packaging expert (titles + thumbnails) for a channel that wants maximum CTR without lying.
 
@@ -114,15 +157,10 @@ OUTPUT JSON:
 }}"""
 
     print("🤖 [Thumbnail] Brainstorming titles...")
-    response = client.models.generate_content(
-        model=TEXT_MODEL,
-        contents=frames + [brainstorm_prompt],
-        config=types.GenerateContentConfig(response_mime_type="application/json"),
-    )
     try:
-        draft = _parse_json(response.text)
-    except (json.JSONDecodeError, AttributeError):
-        print(f"❌ [Thumbnail] Failed to parse brainstorm JSON: {getattr(response, 'text', '')}")
+        draft = _ask_json(api_key, brainstorm_prompt, _Brainstorm, frames)
+    except (ValueError, RuntimeError) as e:
+        print(f"❌ [Thumbnail] Failed to parse brainstorm JSON: {e}")
         return {
             "titles": ["Could not generate titles - please try again"],
             "thumbnail_texts": [],
@@ -163,18 +201,13 @@ OUTPUT JSON:
 }}"""
 
     print("🧐 [Thumbnail] Scoring titles...")
-    response = client.models.generate_content(
-        model=TEXT_MODEL,
-        contents=[critic_prompt],
-        config=types.GenerateContentConfig(response_mime_type="application/json"),
-    )
     try:
-        picked = _parse_json(response.text)
+        picked = _ask_json(api_key, critic_prompt, _Picked)
         titles = [t for t in picked.get("titles", []) if isinstance(t, str) and t.strip()]
         if not titles:
             raise ValueError("no titles")
-    except (json.JSONDecodeError, AttributeError, ValueError):
-        print(f"⚠️ [Thumbnail] Critic failed, falling back to the brainstorm: {getattr(response, 'text', '')[:300]}")
+    except (ValueError, RuntimeError) as e:
+        print(f"⚠️ [Thumbnail] Critic failed, falling back to the brainstorm: {str(e)[:300]}")
         titles = candidates[:10]
         picked = {"thumbnail_texts": [], "recommended": []}
 
@@ -197,7 +230,6 @@ def refine_titles(api_key, context, user_message, conversation_history=None):
     """
     Takes video context + user feedback and returns refined title suggestions.
     """
-    client = genai.Client(api_key=api_key)
 
     history_text = ""
     if conversation_history:
@@ -231,23 +263,15 @@ OUTPUT JSON:
     "language": "ISO 639-1 code of the language the titles are written in"
 }}"""
 
-    response = client.models.generate_content(
-        model=TEXT_MODEL,
-        contents=[prompt],
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json"
-        )
-    )
-
     try:
-        result = _parse_json(response.text)
+        result = _ask_json(api_key, prompt, _Refined)
         titles = [t for t in result.get("titles", []) if isinstance(t, str) and t.strip()]
         texts = [str(t) for t in result.get("thumbnail_texts", [])][:len(titles)]
         texts += [""] * (len(titles) - len(texts))
         return {"titles": titles, "thumbnail_texts": texts,
                 "language": str(result.get("language") or "")[:5]}
-    except (json.JSONDecodeError, AttributeError):
-        print(f"❌ [Thumbnail] Failed to parse refined titles: {response.text}")
+    except (ValueError, RuntimeError) as e:
+        print(f"❌ [Thumbnail] Failed to parse refined titles: {e}")
         return {"titles": ["Could not refine titles - please try again"], "thumbnail_texts": [], "language": ""}
 
 
@@ -565,11 +589,11 @@ def _ai_save_kwargs(img):
     return kwargs
 
 
-def finalize_thumbnail(img, out_path):
+def finalize_thumbnail(img, out_path, ai_generated=True):
     """Cover-crop to 1280x720 and save a JPEG under YouTube's 2 MB limit.
 
-    Every file that leaves here is machine-marked as AI-generated — see
-    AI_XMP_PACKET.
+    Every image-model file that leaves here is machine-marked as AI-generated
+    — see AI_XMP_PACKET. A frame of the user's own video with PIL text is not.
     """
     img = img.convert("RGB")
     scale = max(THUMB_W / img.width, THUMB_H / img.height)
@@ -578,7 +602,7 @@ def finalize_thumbnail(img, out_path):
     left = (img.width - THUMB_W) // 2
     top = (img.height - THUMB_H) // 2
     img = img.crop((left, top, left + THUMB_W, top + THUMB_H))
-    marks = _ai_save_kwargs(img)
+    marks = _ai_save_kwargs(img) if ai_generated else {}
     for q in (92, 88, 84, 78, 70, 60):
         try:
             img.save(out_path, "JPEG", quality=q, optimize=True, **marks)
@@ -660,9 +684,12 @@ def generate_thumbnail(api_key, title, session_id, face_image_path=None, bg_imag
     person reference when the user picked a frame instead of uploading a photo.
     Returns [{"url", "text", "why"}] (only the ones that rendered).
     """
-    client = genai.Client(api_key=api_key)
     output_dir = os.path.join("output", "thumbnails", session_id)
     os.makedirs(output_dir, exist_ok=True)
+    if not api_key:
+        base = face_image_path or (frame_reference or {}).get("path") or bg_image_path
+        return frame_thumbnails(base, thumbnail_text_hint or title, session_id, count)
+    client = genai.Client(api_key=api_key)
 
     # References travel as immutable byte parts: one PIL Image shared by the
     # worker threads below raced inside the SDK's encoder and every call died.
@@ -722,6 +749,28 @@ def generate_thumbnail(api_key, title, session_id, face_image_path=None, bg_imag
     return thumbnails
 
 
+def frame_thumbnails(image_path, text, session_id, count=3):
+    """No image model (local LLM only): the user's frame or photo with the
+    hook text set in PIL, one variant per text side / colour."""
+    if not (image_path and os.path.exists(image_path)):
+        raise RuntimeError("Without a Gemini key the thumbnail is made from your own picture: "
+                           "pick a frame of the video or upload a photo, then generate again.")
+    words = (text or "").upper().split()
+    text = " ".join(words[:5])
+    output_dir = os.path.join("output", "thumbnails", session_id)
+    batch = uuid.uuid4().hex[:6]
+    looks = [("left", "yellow"), ("right", "white"), ("bottom", "yellow"),
+             ("top", "white"), ("left", "white"), ("right", "yellow")]
+    out = []
+    for i, (side, color) in enumerate(looks[:max(1, count)]):
+        out_path = os.path.join(output_dir, f"thumb_{batch}_{i + 1}.jpg")
+        finalize_thumbnail(burn_thumbnail_text(Image.open(image_path), text, side, color), out_path,
+                           ai_generated=False)
+        out.append({"url": f"/thumbnails/{session_id}/{os.path.basename(out_path)}", "text": text,
+                    "why": "Your frame + the hook text (no AI image without a Gemini key)", "fallback": True})
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Description
 # ---------------------------------------------------------------------------
@@ -731,7 +780,6 @@ def generate_youtube_description(api_key, title, transcript_segments, language, 
     Uses Gemini to generate a YouTube description with chapter markers from transcript segments.
     Returns: { "description": "full description text with chapters" }
     """
-    client = genai.Client(api_key=api_key)
 
     # Format segments for the prompt
     formatted_segments = []
@@ -743,6 +791,8 @@ def generate_youtube_description(api_key, title, transcript_segments, language, 
         formatted_segments.append(f"[{timestamp}] {seg.get('text', '').strip()}")
 
     segments_text = "\n".join(formatted_segments)
+    if not api_key:
+        segments_text = segments_text[:LOCAL_TRANSCRIPT_CHARS]
 
     # Format total duration
     dur_mins = int(video_duration // 60)
@@ -774,7 +824,12 @@ REQUIREMENTS:
 OUTPUT: Return ONLY the description text (no JSON wrapper, no markdown code blocks). The description should be ready to paste directly into YouTube."""
 
     print("🤖 [Thumbnail] Generating YouTube description with chapters...")
-    response = client.models.generate_content(
+    if not api_key:
+        import llm_backend
+        answer = llm_backend.generate_json(
+            prompt + '\n\nReturn it as JSON: {"description": "<the description text>"}', _Description)[0]
+        return {"description": (answer.get("description") or "").strip()}
+    response = genai.Client(api_key=api_key).models.generate_content(
         model=TEXT_MODEL,
         contents=[prompt],
     )

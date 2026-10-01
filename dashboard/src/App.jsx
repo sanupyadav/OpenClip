@@ -1944,6 +1944,7 @@ function App() {
           {activeTab === 'thumbnails' && (
             <ThumbnailStudio
               geminiApiKey={apiKey}
+              localLlm={billingEnabled ? null : localLlm}
               uploadPostKey={uploadPostKey}
               uploadUserId={uploadUserId}
               managed={isManaged}

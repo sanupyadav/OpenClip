@@ -6778,6 +6778,13 @@ async def thumbnail_upload(
     return {"session_id": session_id}
 
 
+def _thumb_local_llm() -> bool:
+    """YouTube Studio without a Gemini key: self-host with LLM_BASE_URL (e.g.
+    Ollama on Kaggle) writes the titles and the description, and the
+    thumbnails are the user's frame + text (thumbnail.frame_thumbnails)."""
+    return not BILLING_ENABLED and llm_backend.active()
+
+
 @app.post("/api/thumbnail/analyze")
 async def thumbnail_analyze(
     request: Request,
@@ -6788,7 +6795,7 @@ async def thumbnail_analyze(
 ):
     """Analyze a video and suggest viral YouTube titles."""
     api_key = await resolve_gemini(request)
-    if not api_key:
+    if not api_key and not _thumb_local_llm():
         raise gemini_missing_error()
 
     pre_transcript = None
@@ -6890,7 +6897,7 @@ async def thumbnail_titles(
 ):
     """Refine title suggestions or accept a manual title."""
     api_key = await resolve_gemini(request)
-    if not api_key:
+    if not api_key and not _thumb_local_llm():
         raise gemini_missing_error()
 
     # Manual title mode - just create a session with the user's title
@@ -6969,7 +6976,7 @@ async def thumbnail_generate(
     not. frame: url of a frame from /api/thumbnail/frames to use as the
     person reference when no face photo is uploaded."""
     api_key = await resolve_gemini(request)
-    if not api_key:
+    if not api_key and not _thumb_local_llm():
         raise gemini_missing_error()
 
     # Image generation is the one expensive managed Gemini call — paid plans only.
@@ -7028,6 +7035,9 @@ async def thumbnail_generate(
                 text_hint = texts[titles.index(title)]
             if frame:
                 frame_reference = next((f for f in session.get("frames", []) if f["url"] == frame), None)
+            if frame_reference is None and not api_key and not face_path:
+                # No image model: the thumbnail is a frame, so take the best one.
+                frame_reference = next(iter(session.get("frames") or []), None)
 
         loop = asyncio.get_event_loop()
         thumbnails = await loop.run_in_executor(
@@ -7102,7 +7112,7 @@ async def thumbnail_describe(
 ):
     """Generate a YouTube description with chapters from the transcript."""
     api_key = await resolve_gemini(request)
-    if not api_key:
+    if not api_key and not _thumb_local_llm():
         raise gemini_missing_error()
 
     if req.session_id not in thumbnail_sessions:

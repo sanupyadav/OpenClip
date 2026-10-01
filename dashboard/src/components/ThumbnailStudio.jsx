@@ -70,11 +70,14 @@ function DragDropZone({ label, accept, onFile, file, onClear, icon }) {
   );
 }
 
-export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUserId, managed = false, onCreateClips = null }) {
+export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUserId, managed = false, onCreateClips = null, localLlm = null }) {
   // Managed (hosted plan): Gemini runs server-side via the bearer token, no BYOK key.
   // Only send X-Gemini-Key for self-host BYOK. apiFetch attaches the bearer token.
   const keyHeader = geminiApiKey ? { 'X-Gemini-Key': geminiApiKey } : {};
-  const needsKey = !geminiApiKey && !managed;
+  // A local LLM (Ollama) stands in for the text calls; thumbnails are then
+  // the user's frame + text, since only Gemini can draw.
+  const localOnly = !geminiApiKey && !managed && !!localLlm;
+  const needsKey = !geminiApiKey && !managed && !localLlm;
   // Step management
   const [step, setStep] = useState(0);
   const [mode, setMode] = useState(null); // 'video' or 'manual'
@@ -499,6 +502,17 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
               <p className="text-sm font-medium text-warn lowercase">Gemini API Key Required</p>
               <p className="text-xs text-muted mt-1">YouTube Studio requires a Google Gemini API key to function. Please configure it in the <strong>Settings</strong> tab before using this feature. Gemini's free tier includes 1,500 requests per day.</p>
             </div>
+          </div>
+        )}
+
+        {localOnly && (
+          <div className="mb-6 p-4 bg-paper3 rounded-card flex items-start gap-3">
+            <AlertCircle size={16} className="text-brass shrink-0 mt-0.5" />
+            <p className="text-xs text-muted">
+              Running on your local model ({localLlm.model || 'Ollama'}): titles and the description come from the
+              transcript. Thumbnails are made from a frame of your video (or your photo) with the hook text on it;
+              AI-painted thumbnails need a Gemini key.
+            </p>
           </div>
         )}
 

@@ -67,7 +67,7 @@ const swatchClass = (selected) =>
 
 export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll, onRemove, isProcessing, videoUrl, jobId, clipIndex, existingHook, bulkCount = 0, bulkProgress }) {
     const [position, setPosition] = useState('bottom');
-    const [fontSize] = useState(24);
+    const [fontSize, setFontSize] = useState(24);
     const [fontName, setFontName] = useState('Verdana');
     const [fontColor, setFontColor] = useState('#FFFFFF');
     const [highlightColor, setHighlightColor] = useState('#FFDD00');
@@ -187,7 +187,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
     const fallbackPreviewStyle = {
         fontFamily: fontName,
         color: fontColor,
-        fontSize: '20px',
+        fontSize: `${Math.round(fontSize * 0.85)}px`,
         fontWeight: 'bold',
         maxWidth: '85%',
         padding: '6px 12px',
@@ -283,6 +283,25 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                     </div>
                                 </div>
                             )}
+                        </div>
+
+                        {/* Size */}
+                        <div>
+                            <div className="flex items-center justify-between mb-2">
+                                <p className="eyebrow">Size</p>
+                                <span className="readout">{fontSize}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <span className="text-xs text-muted">A</span>
+                                <input
+                                    type="range" min="12" max="48" step="1"
+                                    value={fontSize}
+                                    onChange={(e) => setFontSize(parseInt(e.target.value, 10))}
+                                    className="w-full accent-[var(--color-accent)]"
+                                    aria-label="subtitle size"
+                                />
+                                <span className="text-base text-muted">A</span>
+                            </div>
                         </div>
 
                         {/* Position Selector */}

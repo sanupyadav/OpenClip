@@ -70,7 +70,7 @@ def test_client_is_saved_write_only_and_auth_needs_the_callback_path(ytapp):
         asyncio.run(app.youtube_auth(app.YouTubeAuthRequest(redirect_uri="https://evil.example/x")))
     url = asyncio.run(app.youtube_auth(app.YouTubeAuthRequest(
         redirect_uri="https://x.trycloudflare.com/api/youtube/callback")))["url"]
-    assert "access_type=offline" in url and len(app._yt_states) == 1
+    assert "access_type=offline" in url and "select_account" in url and len(app._yt_states) == 1
 
 
 def test_callback_with_an_unknown_state_is_refused(ytapp):

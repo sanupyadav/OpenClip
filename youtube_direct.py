@@ -65,9 +65,10 @@ def save(path: str, data: dict):
 def auth_url(client_id: str, redirect_uri: str, state: str) -> str:
     # offline + consent: Google only hands out a refresh token on a consent
     # screen, and without one every upload would need a fresh login.
+    # select_account: pick the channel's Google account, not the browser's default.
     return AUTH_URL + "?" + urllib.parse.urlencode({
         "client_id": client_id, "redirect_uri": redirect_uri, "response_type": "code",
-        "scope": SCOPES, "access_type": "offline", "prompt": "consent",
+        "scope": SCOPES, "access_type": "offline", "prompt": "select_account consent",
         "include_granted_scopes": "true", "state": state,
     })
 

@@ -25,6 +25,10 @@ const clipEstimate = (seconds, minSeconds) => {
     const most = Math.max(1, Math.min(15, Math.floor(seconds / (Number(minSeconds) || 15))));
     return `This video (${Math.round(seconds / 60)} min): auto gives ~${Math.min(low, most)}-${Math.min(high, most)} clips, you can ask for up to ${most}.`;
 };
+// The most clips a source of this length can hold back to back, capped like
+// the server: 15 for a number, 40 for max (clip_selection.MAX_MODE_CLIPS).
+const clipRoom = (seconds, minSeconds, cap) => Math.max(1, Math.min(cap, Math.floor(seconds / (Number(minSeconds) || 15))));
+const CLIP_CHOICES = [3, 5, 8, 10, 15];
 
 const readVideoDuration = (file) => new Promise((resolve) => {
     try {
@@ -47,6 +51,8 @@ export default function MediaInput({ onProcess, isProcessing }) {
     const [file, setFile] = useState(null);
     const [fileSeconds, setFileSeconds] = useState(null);
     const fileTooShort = fileSeconds != null && fileSeconds < MIN_SOURCE_SECONDS;
+    const [urlSeconds, setUrlSeconds] = useState(null);
+    const [probingUrl, setProbingUrl] = useState(false);
     const [acknowledged, setAcknowledged] = useState(false);
     const [outputFormat, setOutputFormat] = useState('vertical'); // vertical | horizontal | square
     const [showInfo, setShowInfo] = useState(false);
@@ -101,6 +107,24 @@ export default function MediaInput({ onProcess, isProcessing }) {
         });
         return () => { cancelled = true; };
     }, [file]);
+
+    // A pasted link: its length (self-host /api/source-duration), so the clip
+    // picker can say how many clips it holds. Silent when it cannot tell.
+    useEffect(() => {
+        setUrlSeconds(null);
+        if (mode !== 'url' || !/^https?:\/\/\S+\.\S+/.test(url.trim())) return undefined;
+        const ctl = new AbortController();
+        const t = setTimeout(() => {
+            setProbingUrl(true);
+            fetch(getApiUrl(`/api/source-duration?url=${encodeURIComponent(url.trim())}`), { signal: ctl.signal })
+                .then((r) => (r.ok ? r.json() : null))
+                .then((d) => { if (d?.duration) setUrlSeconds(d.duration); })
+                .catch(() => {})
+                .finally(() => setProbingUrl(false));
+        }, 800);
+        return () => { clearTimeout(t); ctl.abort(); };
+    }, [mode, url]);
+    const sourceSeconds = mode === 'file' ? fileSeconds : urlSeconds;
 
     useEffect(() => {
         fetch(getApiUrl('/api/config'))
@@ -366,7 +390,6 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                 />
                             </div>
                             <p className="col-span-1 sm:col-span-3 text-[11px] leading-relaxed text-muted">
-                                {fileSeconds ? <>{clipEstimate(fileSeconds, clipMinSeconds)} </> : null}
                                 Targets, not guarantees: the AI returns fewer clips when the
                                 material doesn't hold them. Leave blank to let it decide, or press
                                 max for every relevant moment (up to 40; a long job renders longer).
@@ -433,6 +456,36 @@ export default function MediaInput({ onProcess, isProcessing }) {
                             </div>
                         </div>
                     )}
+                </div>
+
+                {/* How many clips: the estimate for this video, and the choice. */}
+                <div className="mt-5">
+                    <p className="eyebrow mb-2">How many clips</p>
+                    <div className="flex flex-wrap gap-2">
+                        {['', ...CLIP_CHOICES.filter((n) => !sourceSeconds || n <= clipRoom(sourceSeconds, clipMinSeconds, 15)), 'max'].map((n) => {
+                            const active = String(targetClips) === String(n);
+                            return (
+                                <button
+                                    key={n || 'auto'}
+                                    type="button"
+                                    onClick={() => setTargetClips(String(n))}
+                                    className={`px-3 py-1.5 rounded-input border font-mono text-sm transition-colors
+                                        ${active ? 'border-[color:var(--color-accent)] text-ink' : 'border-rule2 text-muted hover:border-[color:var(--color-accent)]'}`}
+                                >
+                                    {n === '' ? 'auto' : n === 'max' ? 'max' : n}
+                                </button>
+                            );
+                        })}
+                    </div>
+                    <p className="text-[11px] leading-relaxed text-muted mt-2">
+                        {sourceSeconds ? (
+                            <>{clipEstimate(sourceSeconds, clipMinSeconds)} Max finds every relevant moment, up to {clipRoom(sourceSeconds, clipMinSeconds, 40)}.</>
+                        ) : probingUrl ? (
+                            <><Loader2 size={11} className="inline animate-spin" /> Checking the video length…</>
+                        ) : (
+                            'Auto lets the AI decide. Max gives every relevant moment (up to 40). Fewer come back when the video does not hold them.'
+                        )}
+                    </p>
                 </div>
 
                 <label className="flex items-start gap-2.5 mt-5 text-left text-[13px] sm:text-xs leading-relaxed text-muted cursor-pointer select-none">

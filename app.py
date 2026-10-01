@@ -2930,6 +2930,15 @@ async def _probe_youtube_quality(url: str) -> dict:
     return await loop.run_in_executor(None, _run)
 
 
+@app.get("/api/source-duration")
+async def source_duration(url: str):
+    """Self-host: a link's length before submitting, so the form can say how
+    many clips it can give. Not in cloud mode: an open yt-dlp runner."""
+    _yt_self_host()
+    await _validate_source_url(url)
+    return {"duration": int((await _probe_youtube_quality(url)).get("duration") or 0)}
+
+
 async def _validate_source_url(url: str):
     """400 unless ``url`` is safe to hand to yt-dlp: http(s) on a globally
     routable host (security_utils) and, on YouTube, one video rather than a

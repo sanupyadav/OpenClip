@@ -180,3 +180,15 @@ def test_check_reads_the_live_state_of_each_video(ytapp, monkeypatch):
         "a": {"privacy": "private", "publishAt": "2026-10-02T10:00:00Z"}})
     rows = {r["clip_index"]: r for r in asyncio.run(app.youtube_check_uploads())["uploads"]}
     assert rows[0]["live"] == "scheduled" and rows[1]["live"] == "deleted" and "live" not in rows[2]
+
+
+def test_source_duration_is_self_host_only_and_validates_the_link(ytapp, monkeypatch):
+    async def probe(url):
+        return {"duration": 754}
+    monkeypatch.setattr(app, "_probe_youtube_quality", probe)
+    assert asyncio.run(app.source_duration("https://www.youtube.com/watch?v=dQw4w9WgXcQ"))["duration"] == 754
+    with pytest.raises(app.HTTPException):
+        asyncio.run(app.source_duration("http://127.0.0.1/x"))
+    monkeypatch.setattr(app, "BILLING_ENABLED", True)
+    with pytest.raises(app.HTTPException):
+        asyncio.run(app.source_duration("https://www.youtube.com/watch?v=dQw4w9WgXcQ"))

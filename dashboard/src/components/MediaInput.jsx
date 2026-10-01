@@ -54,6 +54,9 @@ export default function MediaInput({ onProcess, isProcessing }) {
     const [urlSeconds, setUrlSeconds] = useState(null);
     const [probingUrl, setProbingUrl] = useState(false);
     const [acknowledged, setAcknowledged] = useState(false);
+    // Self-host: no rights checkbox, it is the operator's own server. Cloud
+    // keeps it (the attestation is stored with every job).
+    const [selfHost, setSelfHost] = useState(false);
     const [outputFormat, setOutputFormat] = useState('vertical'); // vertical | horizontal | square
     const [showInfo, setShowInfo] = useState(false);
     // Advanced generation controls — empty string means "let the AI decide",
@@ -130,6 +133,10 @@ export default function MediaInput({ onProcess, isProcessing }) {
         fetch(getApiUrl('/api/config'))
             .then((r) => r.ok ? r.json() : null)
             .then((cfg) => {
+                if (cfg && cfg.billingEnabled === false) {
+                    setSelfHost(true);
+                    setAcknowledged(true);
+                }
                 if (cfg && cfg.youtubeUrlEnabled === false) {
                     setYoutubeUrlEnabled(false);
                     setMode('file');
@@ -488,7 +495,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
                     </p>
                 </div>
 
-                <label className="flex items-start gap-2.5 mt-5 text-left text-[13px] sm:text-xs leading-relaxed text-muted cursor-pointer select-none">
+                {!selfHost && <label className="flex items-start gap-2.5 mt-5 text-left text-[13px] sm:text-xs leading-relaxed text-muted cursor-pointer select-none">
                     <input
                         type="checkbox"
                         checked={acknowledged}
@@ -498,7 +505,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
                     <span>
                         I confirm I own this content or have the rights to process it. I am responsible for any content I submit. See our <a href="/terms" target="_blank" rel="noopener noreferrer" className="text-ink2 underline underline-offset-2 hover:text-brass transition-colors" onClick={(e) => e.stopPropagation()}>Terms</a> and <a href="/privacy" target="_blank" rel="noopener noreferrer" className="text-ink2 underline underline-offset-2 hover:text-brass transition-colors" onClick={(e) => e.stopPropagation()}>Privacy Policy</a>.
                     </span>
-                </label>
+                </label>}
 
                 <button
                     type="submit"

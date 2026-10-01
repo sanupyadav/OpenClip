@@ -62,3 +62,11 @@ README.md
 
 
 
+
+# Local runtime data: output/ is a volume, the rest never runs in the image
+output/
+uploads/
+.cache/
+graft/
+screenshots/
+kaggle/

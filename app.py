@@ -3388,7 +3388,8 @@ async def process_endpoint(
                                 detail=f"{name} must be between {lo:g} and {hi:g}")
         return int(val) if integer else val
 
-    n_clips = _gen_control(target_clips, "target_clips", 1, 15, integer=True)
+    max_clips_mode = str(target_clips or "").strip().lower() == "max"
+    n_clips = None if max_clips_mode else _gen_control(target_clips, "target_clips", 1, 15, integer=True)
     min_secs = _gen_control(clip_min_seconds, "clip_min_seconds", 5, 175)
     max_secs = _gen_control(clip_max_seconds, "clip_max_seconds", 10, 180)
     if min_secs is not None and max_secs is not None and max_secs < min_secs + 5:
@@ -3396,6 +3397,8 @@ async def process_endpoint(
                             detail="clip_max_seconds must be at least 5s above clip_min_seconds")
     if n_clips is not None:
         env["CLIP_TARGET_MIN"] = env["CLIP_TARGET_MAX"] = str(n_clips)
+    if max_clips_mode:
+        env["CLIP_TARGET_MODE"] = "max"
     if min_secs is not None:
         env["CLIP_MIN_SECONDS"] = str(min_secs)
     if max_secs is not None:

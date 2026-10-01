@@ -51,7 +51,7 @@ def clip_count_targets(n_windows):
     # Floor grows with the material: 3 windows -> 3, 5 -> 4, 10+ -> 6.
     low = max(2, min(6, n // 2 + 2))
     # Ceiling allows a rich window to yield more than one without inviting padding.
-    high = min(12, max(4, n * 2))
+    high = min(MAX_MODE_CLIPS if max_mode() else 12, max(4, n * 2))
     low = min(low, high)
 
     def _override(name, current):
@@ -66,6 +66,30 @@ def clip_count_targets(n_windows):
     low = _override("CLIP_TARGET_MIN", low)
     high = _override("CLIP_TARGET_MAX", high)
     return low, max(low, high)
+
+
+# "max relevant clips" (target_clips=max): every window the scoring pass rates
+# at least MAX_MODE_MIN_SCORE goes to the detail pass instead of the top
+# 3-10, and the clip ceiling rises to MAX_MODE_CLIPS. The score is the
+# relevance filter, so a dull video still comes back short.
+MAX_MODE_MIN_SCORE = 60
+MAX_MODE_CLIPS = 40
+
+
+def max_mode():
+    return os.environ.get("CLIP_TARGET_MODE") == "max"
+
+
+def shortlist_windows(scored, by_id, target):
+    """The windows for the detail pass, best score first: the top `target`,
+    or in max mode every one scoring MAX_MODE_MIN_SCORE+ (never fewer than
+    `target`, never more than MAX_MODE_CLIPS)."""
+    ranked = [by_id[w["id"]] for w in sorted(scored, key=lambda w: w.get("score", 0), reverse=True)
+              if w.get("id") in by_id]
+    if not max_mode():
+        return ranked[:target]
+    good = sum(1 for w in scored if w.get("id") in by_id and w.get("score", 0) >= MAX_MODE_MIN_SCORE)
+    return ranked[:min(MAX_MODE_CLIPS, max(target, good))]
 
 
 def shortlist_target(video_duration):

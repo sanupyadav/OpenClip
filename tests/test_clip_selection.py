@@ -311,3 +311,14 @@ def test_pinned_clip_count_grows_the_shortlist(monkeypatch):
     assert shortlist_target(60) == 15        # capped at 15, windows limit it anyway
     monkeypatch.setenv("CLIP_TARGET_MAX", "2")
     assert shortlist_target(60 * 60) == 10   # never shrinks the auto count
+
+
+def test_max_mode_shortlists_every_relevant_window(monkeypatch):
+    from clip_selection import shortlist_windows, clip_count_targets
+    by_id = {i: {"id": i} for i in range(30)}
+    scored = [{"id": i, "score": 90 - i * 3} for i in range(30)]  # 90, 87, ... 3: 11 score >= 60
+    assert [w["id"] for w in shortlist_windows(scored, by_id, 4)] == [0, 1, 2, 3]
+    monkeypatch.setenv("CLIP_TARGET_MODE", "max")
+    assert len(shortlist_windows(scored, by_id, 4)) == 11
+    assert len(shortlist_windows(scored, by_id, 15)) == 15  # never under the normal target
+    assert clip_count_targets(25)[1] == 40 and clip_count_targets(3)[1] == 6

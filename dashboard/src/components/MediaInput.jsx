@@ -326,13 +326,24 @@ export default function MediaInput({ onProcess, isProcessing }) {
                         <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-2 animate-fade">
                             <div>
                                 <p className="eyebrow mb-1.5">clips to aim for</p>
-                                <input
-                                    type="number" min="1" max="15" step="1"
-                                    value={targetClips}
-                                    onChange={(e) => setTargetClips(e.target.value)}
-                                    placeholder="auto"
-                                    className="input-field"
-                                />
+                                <div className="flex gap-1.5">
+                                    <input
+                                        type={targetClips === 'max' ? 'text' : 'number'} min="1" max="15" step="1"
+                                        value={targetClips === 'max' ? 'max relevant' : targetClips}
+                                        onChange={(e) => setTargetClips(e.target.value)}
+                                        disabled={targetClips === 'max'}
+                                        placeholder="auto"
+                                        className="input-field min-w-0 flex-1"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => setTargetClips((v) => (v === 'max' ? '' : 'max'))}
+                                        className={`btn-quiet px-2.5 text-xs shrink-0 ${targetClips === 'max' ? 'text-brass' : ''}`}
+                                        title="Every moment the AI rates as relevant (up to 40), instead of a fixed number"
+                                    >
+                                        max
+                                    </button>
+                                </div>
                             </div>
                             <div>
                                 <p className="eyebrow mb-1.5">min length (s)</p>
@@ -357,7 +368,8 @@ export default function MediaInput({ onProcess, isProcessing }) {
                             <p className="col-span-1 sm:col-span-3 text-[11px] leading-relaxed text-muted">
                                 {fileSeconds ? <>{clipEstimate(fileSeconds, clipMinSeconds)} </> : null}
                                 Targets, not guarantees: the AI returns fewer clips when the
-                                material doesn't hold them. Leave blank to let it decide.
+                                material doesn't hold them. Leave blank to let it decide, or press
+                                max for every relevant moment (up to 40; a long job renders longer).
                             </p>
                             <div className="col-span-1 sm:col-span-3 flex flex-wrap items-center justify-between gap-3 pt-3 sm:pt-1 border-t border-rule">
                                 <span className="text-xs text-ink2">subtitle language</span>

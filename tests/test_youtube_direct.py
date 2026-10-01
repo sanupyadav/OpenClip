@@ -192,3 +192,13 @@ def test_source_duration_is_self_host_only_and_validates_the_link(ytapp, monkeyp
     monkeypatch.setattr(app, "BILLING_ENABLED", True)
     with pytest.raises(app.HTTPException):
         asyncio.run(app.source_duration("https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
+
+
+def test_youtube_description_credits_the_source_video():
+    src = {"url": "https://youtube.com/watch?v=abc", "title": "Big Talk", "channel": "Some Pod",
+           "channel_url": "https://youtube.com/@somepod"}
+    d = yt.youtube_description({"video_description_for_youtube": "What happens.\n\n#Shorts #pod"}, src)
+    assert d.startswith("What happens.") and "Big Talk by Some Pod" in d
+    assert "https://youtube.com/watch?v=abc" in d and "@somepod" in d
+    # An upload has no source link: no credit, and the Instagram copy stands in.
+    assert yt.youtube_description({"video_description_for_instagram": "insta"}, None) == "insta"

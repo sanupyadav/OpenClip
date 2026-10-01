@@ -38,7 +38,8 @@ export default function YouTubeUploadModal({ isOpen, onClose, clip, jobId, index
         setResult(null);
         setError('');
         setTitle(clip?.video_title_for_youtube_short || clip?.title || '');
-        setDescription(clip?.video_description_for_instagram || clip?.video_description_for_tiktok || '');
+        setDescription(clip?.video_description_for_youtube || clip?.video_description_for_instagram || clip?.video_description_for_tiktok || '');
+        setTags((clip?.youtube_tags || []).join(', '));
         apiJson('/api/youtube/status').then(setStatus).catch(() => setStatus({ connected: false }));
     }, [isOpen, clip]);
 

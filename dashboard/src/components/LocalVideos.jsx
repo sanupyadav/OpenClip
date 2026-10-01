@@ -114,7 +114,10 @@ export default function LocalVideos({ onCount, onOpenSettings }) {
       <YouTubeUploadModal
         isOpen={!!ytTarget}
         onClose={() => setYtTarget(null)}
-        clip={ytTarget && { title: ytTarget.v.title, video_description_for_instagram: ytTarget.v.description }}
+        clip={ytTarget && {
+          title: ytTarget.v.title, video_description_for_instagram: ytTarget.v.description,
+          video_description_for_youtube: ytTarget.v.youtube_description, youtube_tags: ytTarget.v.youtube_tags,
+        }}
         jobId={ytTarget?.job.job_id}
         index={ytTarget?.v.index}
         inputFilename={ytTarget?.v.url.split('/').pop()}

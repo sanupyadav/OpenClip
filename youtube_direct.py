@@ -109,6 +109,27 @@ def revoke(token: str):
         pass  # disconnecting locally is what matters
 
 
+def credit_block(source: dict) -> str:
+    """Credit to the original video, appended to every clip's YouTube
+    description (main.py). Empty for an upload with no source link."""
+    if not (source or {}).get("url"):
+        return ""
+    by = source.get("channel") or "the original creator"
+    lines = [f"🎬 Credit: {source.get('title') or 'Original video'} by {by}",
+             f"🔗 Full video: {source['url']}"]
+    if source.get("channel_url"):
+        lines.append(f"📺 Channel: {source['channel_url']}")
+    lines.append(f"All rights to the original content belong to {by}.")
+    return "\n".join(lines)
+
+
+def youtube_description(clip: dict, source: dict) -> str:
+    text = (clip.get("video_description_for_youtube") or clip.get("video_description_for_instagram")
+            or clip.get("video_description_for_tiktok") or "").strip()
+    credit = credit_block(source)
+    return f"{text}\n\n{credit}".strip() if credit else text
+
+
 def _clean(text: str) -> str:
     # The Data API rejects '<' and '>' in titles and descriptions.
     return (text or "").replace("<", "").replace(">", "").strip()

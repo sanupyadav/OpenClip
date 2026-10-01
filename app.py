@@ -2777,6 +2777,8 @@ async def list_local_videos():
                                "title": c.get("video_title_for_youtube_short") or c.get("title") or f"Clip {i + 1}",
                                "description": c.get("video_description_for_instagram")
                                               or c.get("video_description_for_tiktok") or "",
+                               "youtube_description": c.get("video_description_for_youtube") or "",
+                               "youtube_tags": c.get("youtube_tags") or [],
                                "youtube": yt_marks.get(str(i)), "telegram": tg_marks.get(str(i))})
             # Numbered in the order the moments happen in the source video.
             videos.sort(key=lambda v: v["start"] if v["start"] is not None else 0)
@@ -5874,10 +5876,11 @@ def _yt_queue_unscheduled(job_id, cfg) -> int:
     todo = _unsent_clips(job_id, _yt_marks(job_id), _YT_UPLOADED)
     step = float(cfg.get("interval_hours") or 3) * 3600
     slot = max(time.time() + 900, float(cfg.get("last_slot") or 0) + step)
-    for idx, path, title, description in todo:
+    for idx, path, title, description, clip in todo:
         _yt_set_mark(job_dir, idx, {"status": "queued", "file": os.path.basename(path), "title": title,
-                                    "description": description, "slot": slot, "publishAt": _yt_iso(slot),
-                                    "at": time.time()})
+                                    "description": clip.get("video_description_for_youtube") or description,
+                                    "tags": clip.get("youtube_tags") or [],
+                                    "slot": slot, "publishAt": _yt_iso(slot), "at": time.time()})
         cfg["last_slot"] = slot
         slot += step
     if todo:
@@ -5913,7 +5916,7 @@ async def _yt_upload_queue():
         m = {k: v for k, v in m.items() if k != "error"}
         _yt_set_mark(job_dir, idx, {**m, "status": "uploading"})
         try:
-            meta = _yt.metadata(m.get("title"), m.get("description"), [], "private", _yt_iso(slot))
+            meta = _yt.metadata(m.get("title"), m.get("description"), m.get("tags"), "private", _yt_iso(slot))
             video_id = await asyncio.to_thread(_yt_upload_blocking, cfg, os.path.join(job_dir, m["file"]), meta)
         except Exception as e:
             quota = "quota" in str(e).lower()
@@ -6177,7 +6180,7 @@ def _unsent_clips(job_id, marks, done=("sent", "queued", "sending")):
         path = os.path.join(job_dir, name or "")
         if name and os.path.isfile(path):
             out.append((i, path, c.get("video_title_for_youtube_short") or c.get("title") or "",
-                        c.get("video_description_for_instagram") or c.get("video_description_for_tiktok") or ""))
+                        c.get("video_description_for_instagram") or c.get("video_description_for_tiktok") or "", c))
     return out
 
 
@@ -6187,7 +6190,7 @@ def _tg_queue_unsent(job_id, cfg=None) -> int:
         return 0
     job_dir = _post_job_dir(job_id)
     todo = _unsent_clips(job_id, tg_marks_at(os.path.join(job_dir, _TG_MARKS)))
-    for idx, path, title, description in todo:
+    for idx, path, title, description, _ in todo:
         _tg_queue(cfg, job_dir, idx, path, title, description)
     return len(todo)
 

@@ -28,6 +28,7 @@ import frame_sampler
 import gemini_worker
 import hook_grounding
 import layout_picker
+from youtube_direct import youtube_description
 import llm_backend
 from clip_selection import (build_transcript_windows, clip_count_targets,
                             clip_duration_bounds, dedupe_overlapping,
@@ -815,6 +816,11 @@ def _content_block(error_text):
     return None
 
 
+# The downloaded video's title / channel / link, for the credit in each clip's
+# YouTube description. ponytail: module state, fine for one job per process.
+SOURCE_INFO = {}
+
+
 def download_youtube_video(url, output_dir=".", on_audio=None):
     """
     Downloads a YouTube video using yt-dlp.
@@ -997,6 +1003,9 @@ def download_youtube_video(url, output_dir=".", on_audio=None):
         # clients, API JSON, m3u8), 4-9 s of round trips per attempt.
         with yt_dlp.YoutubeDL(_base_opts(extractor_args, proxy, cookies)) as ydl:
             info = ydl.extract_info(url, download=False, process=False)
+        SOURCE_INFO.update(url=info.get('webpage_url') or url, title=info.get('title'),
+                           channel=info.get('channel') or info.get('uploader'),
+                           channel_url=info.get('channel_url') or info.get('uploader_url'))
         sanitized = sanitize_filename(info.get('title', 'youtube_video'))
         # Only when the whole source is far bigger than what was paid for: a
         # ranged fetch goes through ffmpeg at ~1-2.5x realtime, while a native
@@ -1997,19 +2006,46 @@ def get_viral_clips(transcript_result, video_duration):
             print(f"   Kept the {max_clips} best-scoring clip(s) of "
                   f"{max_clips + dropped}.")
         # Snap each proposed clip onto real word boundaries (+ a bit of silence).
-        for s in shorts:
-            # Keep the model's raw proposal: it is how boundary accuracy is
-            # measured (distance to the nearest word before the snap; p90 was
-            # 0.4-0.5 s on 8 talks, 21-sep-2026, so the snap reaches it).
-            s["proposed"] = [s.get("start", 0), s.get("end", 0)]
-            ns, ne = snap_clip_to_words(s.get("start", 0), s.get("end", 0), words, video_duration,
-                                        min_duration=min_secs, max_duration=max_secs)
-            s["start"], s["end"] = ns, ne
+        def _snap(clips):
+            for s in clips:
+                # Keep the model's raw proposal: it is how boundary accuracy is
+                # measured (distance to the nearest word before the snap; p90 was
+                # 0.4-0.5 s on 8 talks, 21-sep-2026, so the snap reaches it).
+                s["proposed"] = [s.get("start", 0), s.get("end", 0)]
+                ns, ne = snap_clip_to_words(s.get("start", 0), s.get("end", 0), words, video_duration,
+                                            min_duration=min_secs, max_duration=max_secs)
+                s["start"], s["end"] = ns, ne
+            return clips
+        _snap(shorts)
         deduped = dedupe_overlapping(shorts)
-        if len(deduped) < len(shorts):
+        lost_to_dedupe = len(deduped) < len(shorts)
+        if lost_to_dedupe:
             print(f"   Dropped {len(shorts) - len(deduped)} clip(s) overlapping a "
                   f"better-scored one.")
             shorts = deduped
+
+        # The dedupe took it back under the floor (the floor retry above runs
+        # before it): the next-best windows OUTSIDE the shortlist get one call
+        # for the rest, so "give me 8" returns 8 when the video holds them. A
+        # floor retry that came back short without a dedupe is the material's
+        # honest answer and is left alone.
+        if lost_to_dedupe and len(shorts) < min_clips:
+            used = {str(s.get("source_window_id") or "") for s in shorts} | {w["id"] for w in shortlist}
+            ranked = sorted(scored, key=lambda w: w.get("score", 0), reverse=True)
+            missing = min_clips - len(shorts)
+            spare = [by_id[w["id"]] for w in ranked
+                     if w.get("id") in by_id and w["id"] not in used][:max(3, missing * 2)]
+            if spare:
+                print(f"   {len(shorts)} clip(s) of {min_clips} after dedupe; asking "
+                      f"{len(spare)} more window(s) for {missing}.")
+                extra = _snap(_run_stage_split(
+                    client, model_name, spare, _detail_prompt_for(missing, max(missing, len(spare))),
+                    gemini_worker.DetailResponse, "shorts", costs, "detail-fill") or [])
+                if extra:
+                    shorts = dedupe_overlapping(shorts + extra)
+                    if len(shorts) > max_clips:
+                        shorts = trim_to_best(shorts, max_clips)
+                    print(f"   Now {len(shorts)} clip(s).")
 
         # Aggregate cost across both passes.
         cost_analysis = None
@@ -2395,6 +2431,11 @@ if __name__ == '__main__':
             # --keep-original) or in uploads/ (upload jobs).
             clips_data['source_video'] = os.path.basename(input_video)
             clips_data['output_format'] = output_format
+            # YouTube copy: the long description + a credit to the source video.
+            if args.url:
+                clips_data['source'] = {**SOURCE_INFO, 'url': SOURCE_INFO.get('url') or args.url}
+            for s in clips_data['shorts']:
+                s['video_description_for_youtube'] = youtube_description(s, clips_data.get('source'))
             metadata_file = os.path.join(output_dir, f"{video_title}_metadata.json")
             with open(metadata_file, 'w') as f:
                 json.dump(clips_data, f, indent=2)

@@ -40,6 +40,10 @@ class DetailClipModel(BaseModel):
     video_description_for_instagram: str
     video_title_for_youtube_short: str
     viral_hook_text: str
+    # YouTube copy: the long description and the tags field. Defaulted like
+    # `why`, so a small local model that skips them keeps the clip.
+    video_description_for_youtube: str = ""
+    youtube_tags: List[str] = []
     # One sentence on what makes THIS moment a clip, shown under the score in
     # the dashboard. Defaulted so a small local model that skips it does not
     # fail schema validation and lose the clip.
@@ -61,6 +65,8 @@ class VisualClipModel(BaseModel):
     video_description_for_instagram: str
     video_title_for_youtube_short: str
     viral_hook_text: str
+    video_description_for_youtube: str = ""
+    youtube_tags: List[str] = []
 
 
 class VisualResponse(BaseModel):
@@ -81,9 +87,12 @@ TIME CONTRACT — STRICT:
   shorter than {min_secs:g}s, return one clip spanning the full video.
 - Cut on visual scene changes, never mid-motion.
 
-For each clip write catchy copy in {language} (a scroll-stopping hook, a TikTok
-and an Instagram description, and a YouTube title ≤100 chars). Order clips best
-to worst by how likely they are to stop a viewer scrolling.
+For each clip write catchy copy in {language}: a scroll-stopping hook, a TikTok
+and an Instagram description (2-3 sentences + 5-8 hashtags), a creative YouTube
+title ≤100 chars ending in 1-2 hashtags, a `video_description_for_youtube`
+(3-5 sentences on what happens and why to watch, then 8-12 relevant hashtags
+incl. #Shorts) and `youtube_tags` (8-15 search keywords, no #). Order clips
+best to worst by how likely they are to stop a viewer scrolling.
 """
 
 
@@ -330,9 +339,18 @@ HOOK PLAYBOOK — pick the strongest fitting pattern for `viral_hook_text` (max 
   named, quote the clip's strongest sentence instead of summarising the topic.
 
 COPY RULES — ALL text fields (descriptions, title, hook) MUST be written in TRANSCRIPT_LANGUAGE ({language}):
-- Descriptions (TikTok + Instagram): 1-2 punchy sentences that tease the payoff
-  without spoiling it, then 3-5 topically relevant hashtags. No generic hashtag spam.
-- `video_title_for_youtube_short`: max 100 chars, curiosity-driven, no fake claims.
+- Descriptions (TikTok + Instagram): 2-3 punchy sentences that tease the payoff
+  without spoiling it, then 5-8 topically relevant hashtags. No generic hashtag spam.
+- `video_title_for_youtube_short`: max 100 chars INCLUDING 1-2 relevant hashtags
+  at the end. Creative, not a plain summary: use a curiosity gap, a bold claim
+  the clip backs up, a number, or a name from the clip; an emoji only if it
+  fits. No fake claims, no clickbait the clip does not pay off.
+- `video_description_for_youtube`: 3-5 sentences — what happens in this clip,
+  the key point or punchline, and why it is worth watching — then a blank
+  line and 8-12 relevant hashtags (always include #Shorts; mix topic, niche
+  and broad tags). Do not add links or credits: those are added later.
+- `youtube_tags`: 8-15 search keywords/phrases people would type to find this
+  clip (topic, names, niche terms), without the # sign.
 - `predicted_score`: honest 0-100 estimate of viral potential.
 - `why`: one sentence, max 20 words, naming what makes THIS moment worth a
   clip — the specific hook, claim, number or payoff, not the topic.
@@ -352,7 +370,9 @@ Return only:
       "predicted_score": <integer 0-100>,
       "video_description_for_tiktok": "<description + hashtags>",
       "video_description_for_instagram": "<description + hashtags>",
-      "video_title_for_youtube_short": "<title max 100 chars>",
+      "video_title_for_youtube_short": "<creative title + 1-2 hashtags, max 100 chars>",
+      "video_description_for_youtube": "<3-5 sentences, blank line, 8-12 hashtags>",
+      "youtube_tags": ["<keyword>", "..."],
       "viral_hook_text": "<short overlay max 10 words>",
       "why": "<one sentence, max 20 words>"
     }}

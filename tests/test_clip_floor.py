@@ -99,3 +99,15 @@ def test_scoring_fills_the_shortlist_it_targets(monkeypatch):
                                        for i in range(6)]])
     detail_windows = [c[1] for c in calls if c[0] == "detail"][0]
     assert len(detail_windows) == 8
+
+
+def test_clips_lost_to_the_dedupe_are_refilled_from_unused_windows(monkeypatch):
+    # Six back, two of them the same seconds: the dedupe leaves five, under
+    # the floor of six, and the windows outside the shortlist fill the gap.
+    first = [_clip(i * 60, f"window_{i + 1:03d}") for i in range(5)] + [_clip(1, "window_006", score=10)]
+    fill = [_clip(500, "window_020")]
+    clips, calls = _run(monkeypatch, [first, fill])
+    detail_calls = [c for c in calls if c[0] == "detail"]
+    assert len(detail_calls) == 2
+    assert not set(detail_calls[1][1]) & set(detail_calls[0][1])  # only windows not tried yet
+    assert len(clips) == 6

@@ -1652,6 +1652,8 @@ async def run_job_wrapper(job_id):
         # Autopilot bookkeeping + autopublish (before the generic clips-ready
         # email, which it replaces for its own jobs).
         await _autopilot_job_finished(job_id, job)
+        # Self-host: Settings → Music → auto (before the sends read the files).
+        await _music_auto(job_id, job)
         # Self-host: Settings → Telegram → Auto-send new clips.
         await _telegram_auto_send(job_id, job)
         # Self-host: Settings → YouTube → Auto-schedule.
@@ -6028,6 +6030,132 @@ async def youtube_delete_upload(job_id: str, clip_index: int):
             raise HTTPException(status_code=409, detail=f"YouTube: {e}")
     _yt_set_mark(job_dir, clip_index, None)
     return {"deleted": True}
+
+
+# --- Background music (self-host): Stable Audio Open + an ffmpeg mix, see
+# music.py. Settings → Music turns it on for every new job (one track per
+# job, shared by its clips); the clip card's "music" button adds, changes or
+# removes it on one clip. Runs in this process, one generation at a time,
+# and hands the VRAM back after each batch.
+import music as _music
+
+_MUSIC_FILE = os.path.join(OUTPUT_DIR, ".music.json")
+
+
+def _music_cfg():
+    return {"auto": False, "style": "lofi", "volume": 0.18, **_yt.load(_MUSIC_FILE)}
+
+
+def _music_status(cfg=None):
+    cfg = cfg or _music_cfg()
+    return {"auto": bool(cfg["auto"]), "style": cfg["style"], "volume": float(cfg["volume"]),
+            "styles": list(_music.STYLES), "available": _music.available(),
+            "tokenSet": bool(os.environ.get("HF_TOKEN"))}
+
+
+def _music_error(e) -> str:
+    text = str(e)
+    if any(k in text.lower() for k in ("401", "403", "gated", "access to model", "token")):
+        return ("The music model is gated: accept its license at huggingface.co/"
+                f"{_music.MODEL_ID} and set HF_TOKEN (a Kaggle secret on Kaggle), then try again.")
+    return text[:300]
+
+
+@app.get("/api/music/settings")
+async def music_settings():
+    _yt_self_host()
+    return _music_status()
+
+
+class MusicSettingsRequest(BaseModel):
+    auto: Optional[bool] = None
+    style: Optional[str] = None
+    volume: Optional[float] = None
+
+
+@app.put("/api/music/settings")
+async def music_save_settings(req: MusicSettingsRequest):
+    _yt_self_host()
+    cfg = _music_cfg()
+    if req.style is not None:
+        if req.style not in _music.STYLES:
+            raise HTTPException(status_code=400, detail=f"style must be one of {', '.join(_music.STYLES)}")
+        cfg["style"] = req.style
+    if req.volume is not None:
+        cfg["volume"] = max(0.02, min(1.0, req.volume))
+    if req.auto is not None:
+        cfg["auto"] = req.auto
+    _yt.save(_MUSIC_FILE, cfg)
+    return _music_status(cfg)
+
+
+def _music_batch(paths, prompt, volume, wav_dir):
+    """One track (as long as the longest clip, max 47 s, looped past that)
+    mixed into every clip. Runs in a worker thread."""
+    wav = os.path.join(wav_dir, f".music_{int(time.time())}.wav")
+    try:
+        _music.generate(prompt, max(_music.duration(_music.original(p)) for p in paths), wav)
+        for p in paths:
+            _music.add_music(p, wav, volume)
+    finally:
+        _music.release()
+        if os.path.exists(wav):
+            os.remove(wav)
+
+
+class MusicRequest(BaseModel):
+    job_id: str
+    clip_index: int
+    input_filename: Optional[str] = None  # the edited file on screen
+    style: str = "lofi"
+    prompt: str = ""  # free text; overrides the style
+    volume: float = 0.18
+    remove: bool = False
+
+
+@app.post("/api/music")
+async def clip_music(req: MusicRequest, request: Request):
+    """Add, change or remove the background music of one clip, in place."""
+    _yt_self_host()
+    job_dir = _post_job_dir(req.job_id)
+    if req.job_id in jobs:
+        await _ensure_job_files(req.job_id, request)
+    name = _post_clip_file(req.job_id, req.clip_index, req.input_filename)
+    path = os.path.join(job_dir, name or "")
+    if not name or not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="Video file not found")
+    url = f"/videos/{req.job_id}/{name}"
+    if req.remove:
+        if not _music.remove_music(path):
+            raise HTTPException(status_code=404, detail="This clip has no music to remove")
+        return {"new_video_url": url, "has_music": False}
+    if not _music.available():
+        raise HTTPException(status_code=400, detail="The music model is not installed (pip install diffusers torchsde)")
+    try:
+        await asyncio.to_thread(_music_batch, [path], _music.prompt_for(req.style, req.prompt),
+                                max(0.02, min(1.0, req.volume)), job_dir)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Music: {_music_error(e)}")
+    return {"new_video_url": url, "has_music": True}
+
+
+async def _music_auto(job_id, job):
+    """Settings → Music → auto: music on every clip of a finished job, before
+    the Telegram / YouTube auto-sends read the files. Never raises."""
+    if BILLING_ENABLED or (job or {}).get("status") != "completed":
+        return
+    cfg = _music_cfg()
+    if not cfg["auto"] or not _music.available():
+        return
+    try:
+        paths = [path for _, path, *_ in _unsent_clips(job_id, {}, done=())]
+        if paths:
+            print(f"🎵 Background music: {len(paths)} clip(s) of {job_id}...")
+            await asyncio.to_thread(_music_batch, paths, _music.prompt_for(cfg["style"]),
+                                    float(cfg["volume"]), _post_job_dir(job_id))
+            print(f"🎵 Background music added to {len(paths)} clip(s) of {job_id}")
+    except Exception as e:
+        print(f"⚠️ Background music failed for {job_id}: {_music_error(e)}")
 
 
 # --- Send to Telegram (self-host, the user's own bot). See telegram_direct.py.

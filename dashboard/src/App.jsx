@@ -5,6 +5,7 @@ import LocalLlmCard, { LlmGatewayForm } from './components/LocalLlmCard';
 import YouTubeDirectCard from './components/YouTubeDirectCard';
 import YouTubeUploadsTab from './components/YouTubeUploadsTab';
 import TelegramCard from './components/TelegramCard';
+import MusicCard from './components/MusicCard';
 import QueueTab from './components/QueueTab';
 import ElapsedTimer from './components/ElapsedTimer';
 import { jobProgress } from './lib/jobProgress';
@@ -1586,6 +1587,7 @@ function App() {
                 <>
               {!billingEnabled && <LocalLlmCard llm={localLlm} settings={llmSettings} onSaved={setLlm} />}
               {!billingEnabled && <YouTubeDirectCard />}
+              {!billingEnabled && <MusicCard />}
               {!billingEnabled && <TelegramCard />}
               <KeyInput onKeySet={setApiKey} savedKey={apiKey} />
 

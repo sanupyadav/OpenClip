@@ -328,6 +328,21 @@ the job outright.
 The public `/gta-5-clips` page states these thresholds and this ceiling to
 users; if the behaviour changes, change `dashboard/seo/pages.js` too.
 
+### Background music (`music.py`, self-host only)
+
+Stable Audio Open 1.0 through `diffusers`: instrumental only (MusicGen's
+weights are non-commercial, HeartMuLa sings over the speaker), commercial use
+allowed under the Stability Community License. The model is gated, so it
+needs `HF_TOKEN`. The mix is **in place**: the clip keeps its file name, so the
+gallery, uploads and later edits all see the music, and the original stays
+next to it as `<stem>.nomusic.mp4` (what "change" re-mixes from and "remove"
+restores). The music is looped, faded and ducked under the voice
+(`sidechaincompress`). Settings → Music → auto adds one track per finished
+job, shared by its clips, in `run_job_wrapper` **before** the Telegram /
+YouTube auto-sends read the files. It runs in the API process, one generation
+at a time, and calls `music.release()` after each batch (VRAM). On Kaggle,
+`MUSIC_DEVICE` puts it on Ollama's card.
+
 ### Local LLM for the moment picker (`llm_backend.py`)
 
 `LLM_BASE_URL` (+ `LLM_MODEL`, `LLM_API_KEY`) routes the two transcript

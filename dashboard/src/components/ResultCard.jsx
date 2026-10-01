@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Download, Share2, Send, Instagram, Youtube, Video, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages, FileText, Link2, Scissors, Crosshair, TrendingUp } from 'lucide-react';
+import { Download, Share2, Send, Instagram, Youtube, Video, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages, FileText, Link2, Scissors, Crosshair, TrendingUp, Music } from 'lucide-react';
 import { getApiUrl } from '../config';
 import { apiFetch } from '../lib/api';
 import SubtitleModal from './SubtitleModal';
@@ -10,6 +10,7 @@ import SegmentedControl from './ui/SegmentedControl';
 import WatermarkModal, { watermarkNoticeDismissed } from './WatermarkModal';
 import TikTokDraftNotice from './TikTokDraftNotice';
 import YouTubeUploadModal, { YouTubeMark } from './YouTubeUploadModal';
+import MusicModal from './MusicModal';
 import TelegramSendModal, { TelegramMark } from './TelegramSendModal';
 import { unsendTelegram, fetchTelegramSends } from '../lib/telegram';
 import { useAuth } from '../contexts/AuthContext';
@@ -60,6 +61,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     const [showWatermarkModal, setShowWatermarkModal] = useState(false);
     const { plan, billingEnabled } = useAuth();
     const [showYouTube, setShowYouTube] = useState(false);
+    const [showMusic, setShowMusic] = useState(false);
     const [ytMark, setYtMark] = useState(null);
     const [showTelegram, setShowTelegram] = useState(false);
     const [tgMark, setTgMark] = useState(null);
@@ -988,6 +990,12 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                         {isHooking ? 'saving…' : 'edit hook'}
                     </button>
 
+                    {!billingEnabled && (
+                        <button onClick={() => setShowMusic(true)} className={QUIET_BTN} title="Add, change or remove background music">
+                            <Music size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" /> music
+                        </button>
+                    )}
+
                     <button
                         onClick={() => setShowTranslateModal(true)}
                         disabled={isTranslating}
@@ -1193,6 +1201,18 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                 </div>
             </Modal>
 
+            <MusicModal
+                isOpen={showMusic}
+                onClose={() => setShowMusic(false)}
+                jobId={jobId}
+                index={index}
+                inputFilename={serverVideoFile}
+                onDone={(res) => {
+                    // Same file, new content: bust the player's cache.
+                    setServerVideoFile(res.new_video_url.split('/').pop());
+                    setCurrentVideoUrl(`${getApiUrl(res.new_video_url)}?t=${Date.now()}`);
+                }}
+            />
             <YouTubeUploadModal
                 isOpen={showYouTube}
                 onClose={() => setShowYouTube(false)}

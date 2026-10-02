@@ -1,0 +1,13 @@
+# Local only: run as the host user so the bind-mounted repo is writable.
+services:
+  backend:
+    user: "1000:1000"
+    environment:
+      - HOME=/app
+      - USER=pay1
+      - YOLO_CONFIG_DIR=/app/.cache/Ultralytics
+  # YouTube PO token provider for yt-dlp (silences the bgutil ping warning).
+  bgutil:
+    image: brainicism/bgutil-ytdlp-pot-provider
+    container_name: openshorts-bgutil
+    restart: unless-stopped

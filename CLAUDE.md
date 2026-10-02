@@ -337,8 +337,10 @@ needs `HF_TOKEN`. The mix is **in place**: the clip keeps its file name, so the
 gallery, uploads and later edits all see the music, and the original stays
 next to it as `<stem>.nomusic.mp4` (what "change" re-mixes from and "remove"
 restores). The music is looped, faded and ducked under the voice
-(`sidechaincompress`). Settings → Music → auto adds one track per finished
-job, shared by its clips, in `run_job_wrapper` **before** the Telegram /
+(`sidechaincompress`). Settings → Music → auto gives every clip of a finished
+job its own track, from the `music_prompt` the detail pass writes for that
+clip (genre, instruments, BPM, mood; `music.clip_prompt` falls back to the
+title for older clips), in `run_job_wrapper` **before** the Telegram /
 YouTube auto-sends read the files. It runs in the API process, one generation
 at a time, and calls `music.release()` after each batch (VRAM). On Kaggle,
 `MUSIC_DEVICE` puts it on Ollama's card.

@@ -44,6 +44,8 @@ class DetailClipModel(BaseModel):
     # `why`, so a small local model that skips them keeps the clip.
     video_description_for_youtube: str = ""
     youtube_tags: List[str] = []
+    # Background-music brief designed for this clip (music.py generates it).
+    music_prompt: str = ""
     # One sentence on what makes THIS moment a clip, shown under the score in
     # the dashboard. Defaulted so a small local model that skips it does not
     # fail schema validation and lose the clip.
@@ -67,6 +69,7 @@ class VisualClipModel(BaseModel):
     viral_hook_text: str
     video_description_for_youtube: str = ""
     youtube_tags: List[str] = []
+    music_prompt: str = ""
 
 
 class VisualResponse(BaseModel):
@@ -91,7 +94,9 @@ For each clip write catchy copy in {language}: a scroll-stopping hook, a TikTok
 and an Instagram description (2-3 sentences + 5-8 hashtags), a creative YouTube
 title ≤100 chars ending in 1-2 hashtags, a `video_description_for_youtube`
 (3-5 sentences on what happens and why to watch, then 8-12 relevant hashtags
-incl. #Shorts) and `youtube_tags` (8-15 search keywords, no #). Order clips
+incl. #Shorts), `youtube_tags` (8-15 search keywords, no #) and a
+`music_prompt` (instrumental background music that fits what is shown: genre,
+instruments, tempo in BPM, mood; in English, no vocals). Order clips
 best to worst by how likely they are to stop a viewer scrolling.
 """
 
@@ -351,6 +356,12 @@ COPY RULES — ALL text fields (descriptions, title, hook) MUST be written in TR
   and broad tags). Do not add links or credits: those are added later.
 - `youtube_tags`: 8-15 search keywords/phrases people would type to find this
   clip (topic, names, niche terms), without the # sign.
+- `music_prompt`: a background-music brief DESIGNED FOR THIS CLIP, always in
+  English: genre, 2-3 instruments, tempo in BPM and mood, matching the clip's
+  emotion and pace (a tense argument, a funny story, a calm tutorial and a hype
+  moment need different music). Instrumental only, quiet enough to sit under
+  speech. Example: "warm lofi hip hop, soft Rhodes piano, brushed drums, 80 BPM,
+  reflective". Never name an artist or a song.
 - `predicted_score`: honest 0-100 estimate of viral potential.
 - `why`: one sentence, max 20 words, naming what makes THIS moment worth a
   clip — the specific hook, claim, number or payoff, not the topic.
@@ -373,6 +384,7 @@ Return only:
       "video_title_for_youtube_short": "<creative title + 1-2 hashtags, max 100 chars>",
       "video_description_for_youtube": "<3-5 sentences, blank line, 8-12 hashtags>",
       "youtube_tags": ["<keyword>", "..."],
+      "music_prompt": "<genre, instruments, BPM, mood; English, instrumental>",
       "viral_hook_text": "<short overlay max 10 words>",
       "why": "<one sentence, max 20 words>"
     }}

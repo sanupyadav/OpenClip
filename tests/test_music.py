@@ -51,10 +51,18 @@ def test_mix_ducks_under_the_voice_and_copies_the_video():
     assert music.prompt_for("cinematic", "  soft guitar ") == "soft guitar"
 
 
+def test_auto_music_is_designed_for_each_clip():
+    clip = {"music_prompt": "tense dark synth, 70 BPM", "video_title_for_youtube_short": "The fight"}
+    assert music.clip_prompt(clip).startswith("tense dark synth, 70 BPM")
+    assert "The fight" in music.clip_prompt({"video_title_for_youtube_short": "The fight"})  # older clip
+    assert music.clip_prompt(clip, "upbeat") == music.STYLES["upbeat"]  # a picked style wins
+    assert music.clip_prompt(clip, "auto", "my own words") == "my own words"
+
+
 app = pytest.importorskip("app")
 
 
-def test_auto_music_runs_one_track_for_the_whole_job(monkeypatch, tmp_path, fake_ffmpeg):
+def test_auto_music_gives_each_clip_its_own_track(monkeypatch, tmp_path, fake_ffmpeg):
     monkeypatch.setattr(app, "BILLING_ENABLED", False)
     monkeypatch.setattr(app, "OUTPUT_DIR", str(tmp_path))
     monkeypatch.setattr(app, "_MUSIC_FILE", str(tmp_path / ".music.json"))
@@ -65,7 +73,7 @@ def test_auto_music_runs_one_track_for_the_whole_job(monkeypatch, tmp_path, fake
     for i in range(2):
         (job / f"c{i}.mp4").write_bytes(b"v")
     (job / "s_metadata.json").write_text(json.dumps({"shorts": [
-        {"video_url": f"/videos/jobM/c{i}.mp4"} for i in range(2)]}))
+        {"video_url": f"/videos/jobM/c{i}.mp4", "music_prompt": f"brief {i}"} for i in range(2)]}))
     made = []
 
     def gen(prompt, seconds, out):
@@ -76,9 +84,9 @@ def test_auto_music_runs_one_track_for_the_whole_job(monkeypatch, tmp_path, fake
 
     asyncio.run(app._music_auto("jobM", {"status": "completed"}))
     assert made == []  # off by default
-    asyncio.run(app.music_save_settings(app.MusicSettingsRequest(auto=True, style="upbeat")))
+    asyncio.run(app.music_save_settings(app.MusicSettingsRequest(auto=True)))
     asyncio.run(app._music_auto("jobM", {"status": "completed"}))
-    assert made == [app._music.STYLES["upbeat"]]  # one generation, both clips
+    assert [m.split(",")[0] for m in made] == ["brief 0", "brief 1"]  # one track per clip, its own brief
     assert (job / "c0.mp4").read_bytes() == b"v+music" and (job / "c1.nomusic.mp4").exists()
     assert not list(job.glob(".music_*.wav"))  # the track is not left behind
 

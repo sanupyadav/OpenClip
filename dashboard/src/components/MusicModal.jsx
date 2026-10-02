@@ -5,9 +5,9 @@ import { apiJson } from '../lib/api';
 
 // Self-host: add, change or remove one clip's background music (Stable Audio
 // Open, music.py). The clip keeps its file; onDone gets the server answer.
-export default function MusicModal({ isOpen, onClose, jobId, index, inputFilename, onDone }) {
+export default function MusicModal({ isOpen, onClose, jobId, index, inputFilename, onDone, clipBrief = '' }) {
     const [settings, setSettings] = useState(null);
-    const [style, setStyle] = useState('lofi');
+    const [style, setStyle] = useState('auto');
     const [prompt, setPrompt] = useState('');
     const [volume, setVolume] = useState(0.18);
     const [busy, setBusy] = useState('');
@@ -57,10 +57,16 @@ export default function MusicModal({ isOpen, onClose, jobId, index, inputFilenam
                                 <button key={s} type="button" onClick={() => setStyle(s)}
                                     className={`px-3 py-1.5 rounded-input border text-xs lowercase transition-colors
                                         ${style === s && !prompt.trim() ? 'border-[color:var(--color-accent)] text-ink' : 'border-rule2 text-muted hover:border-[color:var(--color-accent)]'}`}>
-                                    {s}
+                                    {s === 'auto' ? 'auto · made for this clip' : s}
                                 </button>
                             ))}
                         </div>
+                        {style === 'auto' && !prompt.trim() && (
+                            <p className="text-[11px] text-muted mt-2">
+                                {clipBrief ? <>Designed for this clip: <span className="text-ink2">{clipBrief}</span></>
+                                    : 'The music is designed from this clip’s title and mood.'}
+                            </p>
+                        )}
                     </div>
                     <div>
                         <p className="eyebrow mb-2">Or describe it</p>

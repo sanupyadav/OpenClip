@@ -41,14 +41,14 @@ export default function MusicCard() {
                 <div className="flex items-center justify-between gap-3">
                     <div>
                         <p className="text-sm text-ink">Add music to new clips</p>
-                        <p className="text-xs text-muted">Every job that finishes gets one instrumental track under all its clips.</p>
+                        <p className="text-xs text-muted">Every clip of a finished job gets its own instrumental track, designed for that clip.</p>
                     </div>
                     <Switch checked={!!status.auto} disabled={!status.available} onChange={(on) => save({ auto: on })} label="Add music to new clips" />
                 </div>
                 <div className="flex flex-wrap items-center gap-3">
                     <select className="input-field !w-auto text-xs py-1.5" value={status.style}
                         onChange={(e) => save({ style: e.target.value })} aria-label="music style">
-                        {status.styles.map((s) => <option key={s} value={s}>{s}</option>)}
+                        {status.styles.map((s) => <option key={s} value={s}>{s === 'auto' ? 'auto (made for each clip)' : s}</option>)}
                     </select>
                     <span className="text-xs text-muted">volume</span>
                     <input type="range" min="2" max="60" step="1" defaultValue={Math.round(status.volume * 100)}

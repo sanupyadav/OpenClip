@@ -1207,6 +1207,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                 jobId={jobId}
                 index={index}
                 inputFilename={serverVideoFile}
+                clipBrief={clip.music_prompt || ''}
                 onDone={(res) => {
                     // Same file, new content: bust the player's cache.
                     setServerVideoFile(res.new_video_url.split('/').pop());

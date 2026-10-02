@@ -49,6 +49,20 @@ def prompt_for(style: str, prompt: str = "") -> str:
     return (prompt or "").strip() or STYLES.get(style) or STYLES["lofi"]
 
 
+def clip_prompt(clip: dict, style: str = "auto", prompt: str = "") -> str:
+    """The music for one clip: the user's own words, else a fixed style when
+    one was picked, else ("auto") the brief the AI designed for this clip,
+    else, for clips made before there were briefs, one built from its title."""
+    if (prompt or "").strip() or style in STYLES:
+        return prompt_for(style, prompt)
+    brief = str((clip or {}).get("music_prompt") or "").strip()
+    if brief:
+        return f"{brief}, instrumental background music"
+    title = (clip or {}).get("video_title_for_youtube_short") or (clip or {}).get("title") or ""
+    return (f"instrumental background music that fits a short video titled \"{title}\", "
+            "matching its mood, subtle, under speech") if title else STYLES["lofi"]
+
+
 def _load():
     global _pipe
     if _pipe is None:

@@ -6033,8 +6033,9 @@ async def youtube_delete_upload(job_id: str, clip_index: int):
 
 
 # --- Background music (self-host): Stable Audio Open + an ffmpeg mix, see
-# music.py. Settings → Music turns it on for every new job (one track per
-# job, shared by its clips); the clip card's "music" button adds, changes or
+# music.py. Settings → Music turns it on for every new job (each clip its own
+# track, from the music_prompt the detail pass designed for it); the clip
+# card's "music" button adds, changes or
 # removes it on one clip. Runs in this process, one generation at a time,
 # and hands the VRAM back after each batch.
 import music as _music
@@ -6043,13 +6044,14 @@ _MUSIC_FILE = os.path.join(OUTPUT_DIR, ".music.json")
 
 
 def _music_cfg():
-    return {"auto": False, "style": "lofi", "volume": 0.18, **_yt.load(_MUSIC_FILE)}
+    # style "auto": each clip gets the music the AI designed for it (music_prompt).
+    return {"auto": False, "style": "auto", "volume": 0.18, **_yt.load(_MUSIC_FILE)}
 
 
 def _music_status(cfg=None):
     cfg = cfg or _music_cfg()
     return {"auto": bool(cfg["auto"]), "style": cfg["style"], "volume": float(cfg["volume"]),
-            "styles": list(_music.STYLES), "available": _music.available(),
+            "styles": ["auto", *_music.STYLES], "available": _music.available(),
             "tokenSet": bool(os.environ.get("HF_TOKEN"))}
 
 
@@ -6078,8 +6080,8 @@ async def music_save_settings(req: MusicSettingsRequest):
     _yt_self_host()
     cfg = _music_cfg()
     if req.style is not None:
-        if req.style not in _music.STYLES:
-            raise HTTPException(status_code=400, detail=f"style must be one of {', '.join(_music.STYLES)}")
+        if req.style != "auto" and req.style not in _music.STYLES:
+            raise HTTPException(status_code=400, detail=f"style must be auto or one of {', '.join(_music.STYLES)}")
         cfg["style"] = req.style
     if req.volume is not None:
         cfg["volume"] = max(0.02, min(1.0, req.volume))
@@ -6089,25 +6091,34 @@ async def music_save_settings(req: MusicSettingsRequest):
     return _music_status(cfg)
 
 
-def _music_batch(paths, prompt, volume, wav_dir):
-    """One track (as long as the longest clip, max 47 s, looped past that)
-    mixed into every clip. Runs in a worker thread."""
-    wav = os.path.join(wav_dir, f".music_{int(time.time())}.wav")
+def _music_batch(items, volume, wav_dir):
+    """Its own track for each (clip path, music prompt): as long as the clip,
+    max 47 s and looped past that. Runs in a worker thread."""
     try:
-        _music.generate(prompt, max(_music.duration(_music.original(p)) for p in paths), wav)
-        for p in paths:
-            _music.add_music(p, wav, volume)
+        for i, (path, prompt) in enumerate(items):
+            wav = os.path.join(wav_dir, f".music_{int(time.time())}_{i}.wav")
+            try:
+                print(f"🎵 {os.path.basename(path)}: {prompt}")
+                _music.generate(prompt, _music.duration(_music.original(path)), wav)
+                _music.add_music(path, wav, volume)
+            finally:
+                if os.path.exists(wav):
+                    os.remove(wav)
     finally:
         _music.release()
-        if os.path.exists(wav):
-            os.remove(wav)
+
+
+def _clip_meta(job_id, clip_index) -> dict:
+    meta = glob.glob(os.path.join(_post_job_dir(job_id), "*_metadata.json"))
+    clips = ((_yt.load(meta[0]) or {}).get("shorts") or []) if meta else []
+    return clips[clip_index] if 0 <= clip_index < len(clips) else {}
 
 
 class MusicRequest(BaseModel):
     job_id: str
     clip_index: int
     input_filename: Optional[str] = None  # the edited file on screen
-    style: str = "lofi"
+    style: str = "auto"  # auto = the music the AI designed for this clip
     prompt: str = ""  # free text; overrides the style
     volume: float = 0.18
     remove: bool = False
@@ -6132,8 +6143,8 @@ async def clip_music(req: MusicRequest, request: Request):
     if not _music.available():
         raise HTTPException(status_code=400, detail="The music model is not installed (pip install diffusers torchsde)")
     try:
-        await asyncio.to_thread(_music_batch, [path], _music.prompt_for(req.style, req.prompt),
-                                max(0.02, min(1.0, req.volume)), job_dir)
+        prompt = _music.clip_prompt(_clip_meta(req.job_id, req.clip_index), req.style, req.prompt)
+        await asyncio.to_thread(_music_batch, [(path, prompt)], max(0.02, min(1.0, req.volume)), job_dir)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Music: {_music_error(e)}")
     return {"new_video_url": url, "has_music": True}
@@ -6148,12 +6159,12 @@ async def _music_auto(job_id, job):
     if not cfg["auto"] or not _music.available():
         return
     try:
-        paths = [path for _, path, *_ in _unsent_clips(job_id, {}, done=())]
-        if paths:
-            print(f"🎵 Background music: {len(paths)} clip(s) of {job_id}...")
-            await asyncio.to_thread(_music_batch, paths, _music.prompt_for(cfg["style"]),
-                                    float(cfg["volume"]), _post_job_dir(job_id))
-            print(f"🎵 Background music added to {len(paths)} clip(s) of {job_id}")
+        items = [(path, _music.clip_prompt(clip, cfg["style"]))
+                 for _, path, _, _, clip in _unsent_clips(job_id, {}, done=())]
+        if items:
+            print(f"🎵 Background music: {len(items)} clip(s) of {job_id}, each its own track...")
+            await asyncio.to_thread(_music_batch, items, float(cfg["volume"]), _post_job_dir(job_id))
+            print(f"🎵 Background music added to {len(items)} clip(s) of {job_id}")
     except Exception as e:
         print(f"⚠️ Background music failed for {job_id}: {_music_error(e)}")
 

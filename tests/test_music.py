@@ -94,3 +94,10 @@ def test_auto_music_gives_each_clip_its_own_track(monkeypatch, tmp_path, fake_ff
     assert res == {"new_video_url": "/videos/jobM/c0.mp4", "has_music": False}
     with pytest.raises(app.HTTPException):
         asyncio.run(app.clip_music(app.MusicRequest(job_id="jobM", clip_index=0, remove=True), None))
+
+
+def test_only_a_real_access_refusal_reads_as_gated():
+    assert "gated" in app._music_error(RuntimeError("401 Client Error: Unauthorized for url"))
+    # A tokenizer failure used to be reported as "gated" because it says "token".
+    msg = app._music_error(ValueError("T5Tokenizer requires the SentencePiece library"))
+    assert "gated" not in msg and "SentencePiece" in msg

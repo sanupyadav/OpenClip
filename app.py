@@ -6056,11 +6056,15 @@ def _music_status(cfg=None):
 
 
 def _music_error(e) -> str:
-    text = str(e)
-    if any(k in text.lower() for k in ("401", "403", "gated", "access to model", "token")):
-        return ("The music model is gated: accept its license at huggingface.co/"
-                f"{_music.MODEL_ID} and set HF_TOKEN (a Kaggle secret on Kaggle), then try again.")
-    return text[:300]
+    """The real error, with the license hint only for a real access refusal:
+    matching any "token" also caught tokenizer errors and hid them."""
+    text = f"{type(e).__name__}: {e}"
+    lowered = text.lower()
+    if "gatedrepo" in lowered or "401 client error" in lowered or "403 client error" in lowered \
+            or "is restricted" in lowered or "cannot access gated repo" in lowered:
+        return ("The music model is gated and this HF_TOKEN has no access: accept its license at "
+                f"huggingface.co/{_music.MODEL_ID} with the same account, then try again. ({text[:200]})")
+    return text[:400]
 
 
 @app.get("/api/music/settings")
